@@ -1,10 +1,9 @@
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { Link } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import { useThemeColor } from "heroui-native";
 import React, { useCallback } from "react";
 import type { ColorValue } from "react-native";
-import { Pressable, Text } from "react-native";
+import { Text } from "react-native";
 
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -51,17 +50,6 @@ const TabsDrawerLabel = ({ color, focused }: DrawerLabelProps) => {
   return <Text style={{ color: focused ? color : foregroundColor }}>Tabs</Text>;
 };
 
-const ModalHeaderButton = () => {
-  const foregroundColor = useThemeColor("foreground");
-  return (
-    <Link href="/modal" asChild>
-      <Pressable className="mr-4">
-        <Ionicons name="add-outline" size={24} color={foregroundColor} />
-      </Pressable>
-    </Link>
-  );
-};
-
 const DrawerLayout = () => {
   const themeColorForeground = useThemeColor("foreground");
   const themeColorBackground = useThemeColor("background");
@@ -70,6 +58,7 @@ const DrawerLayout = () => {
 
   return (
     <Drawer
+      initialRouteName="(tabs)"
       screenOptions={{
         drawerStyle: { backgroundColor: themeColorBackground },
         headerRight: renderThemeToggle,
@@ -82,20 +71,20 @@ const DrawerLayout = () => {
       }}
     >
       <Drawer.Screen
-        name="index"
-        options={{
-          drawerIcon: HomeDrawerIcon,
-          drawerLabel: HomeDrawerLabel,
-          headerTitle: "Home",
-        }}
-      />
-      <Drawer.Screen
         name="(tabs)"
         options={{
           drawerIcon: TabsDrawerIcon,
           drawerLabel: TabsDrawerLabel,
-          headerRight: ModalHeaderButton,
-          headerTitle: "Tabs",
+          headerShown: false,
+          headerTitle: "CastleCare Driver",
+        }}
+      />
+      <Drawer.Screen
+        name="index"
+        options={{
+          drawerIcon: HomeDrawerIcon,
+          drawerLabel: HomeDrawerLabel,
+          headerTitle: "Sign In / Account",
         }}
       />
     </Drawer>

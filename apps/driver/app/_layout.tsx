@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { AppThemeProvider } from "@/contexts/app-theme-context";
+import { DriverStateProvider } from "@/contexts/driver-state-context";
 
 export const unstable_settings = {
   initialRouteName: "(drawer)",
@@ -26,7 +27,9 @@ export default function Layout() {
       <KeyboardProvider>
         <AppThemeProvider>
           <HeroUINativeProvider>
-            <StackLayout />
+            <DriverStateProvider>
+              <StackLayout />
+            </DriverStateProvider>
           </HeroUINativeProvider>
         </AppThemeProvider>
       </KeyboardProvider>
