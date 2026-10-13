@@ -100,7 +100,7 @@ For more details, see the guide on [Deploying to Vercel](https://www.better-t-st
 callcastlecare/
 ├── apps/
 │   ├── web/         # Frontend application (React + TanStack Start)
-│   ├── native/      # Mobile application (React Native, Expo)
+│   ├── driver/      # Driver mobile app (React Native, Expo)
 │   └── server/      # Backend API (Hono)
 ├── packages/
 │   ├── ui/          # Shared shadcn/ui components and styles
@@ -115,7 +115,7 @@ callcastlecare/
 - `bun run dev:web`: Start only the web application
 - `bun run dev:server`: Start only the server
 - `bun run check-types`: Check TypeScript types across all apps
-- `bun run dev:native`: Start the React Native/Expo development server
+- `bun run dev:driver`: Start the React Native/Expo driver app development server
 - `bun run db:push`: Push schema changes to database
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations

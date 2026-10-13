@@ -28,7 +28,7 @@
     "dev:infra": "turbo run dev -F @callcastlecare/infra",
     "build": "turbo run build",
     "check-types": "turbo run check-types",
-    "dev:native": "turbo run dev -F native",
+    "dev:driver": "turbo run dev -F driver",
     "dev:web": "turbo run dev -F web",
     "dev:server": "turbo run dev -F server",
     "dev:worker": "turbo run dev -F @callcastlecare/infra",

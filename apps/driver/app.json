@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "scheme": "callcastlecare-driver",
+    "userInterfaceStyle": "automatic",
+    "orientation": "default",
+    "web": {
+      "bundler": "metro"
+    },
+    "name": "CastleCare Driver",
+    "slug": "callcastlecare-driver",
+    "plugins": ["expo-font"],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

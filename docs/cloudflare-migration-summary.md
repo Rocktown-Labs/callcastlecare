@@ -90,8 +90,8 @@ Both respond successfully:
 4. **Update `STRIPE_WEBHOOK_PUBLIC_URL`**
    - Point it to the final API URL after the domain transfer.
 
-5. **Update native app config**
-   - Set `EXPO_PUBLIC_SERVER_URL=https://castlecare-server.rocktown-labs.workers.dev` in the native `.env` until the custom domain is live.
+5. **Update driver app config**
+   - Set `EXPO_PUBLIC_SERVER_URL=https://castlecare-server.rocktown-labs.workers.dev` in the driver app `.env` (`apps/driver/.env`) until the custom domain is live.
 
 6. **Clean up stale Vercel references**
    - `README.md` still documents `bun run dev:vercel`, `env:preview`, `deploy:prod`, and Vercel deployment steps.

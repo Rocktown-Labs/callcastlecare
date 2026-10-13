@@ -22,6 +22,7 @@ CastleCare is being rewritten from a previous Next.js application into a simpler
 - The active public services are lawn care, laundry, and window washing.
 - Omit the Homes route, Homes configurator, and broader home-service marketplace surface for now. Do not reintroduce `/homes` until the product scope changes.
 - The earn/provider onboarding route exists as a reference and future worker flow, but it is not the current implementation focus.
+- `apps/driver` is the dedicated native driver app (Expo). Staff/driver flows belong there; customers use the web app (desktop and mobile web). There is no customer-facing native app.
 - Core public flows are marketing pages, service discovery, authentication, booking, checkout, and post-booking customer status.
 - Dashboards should be practical application surfaces, not marketing pages: prioritize clear navigation, scannable data, and fast task completion.
 
