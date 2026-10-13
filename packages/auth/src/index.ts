@@ -187,7 +187,7 @@ const createAuth = (config: AuthConfig, database: Database) => {
         : undefined,
     trustedOrigins: [
       config.CORS_ORIGIN,
-      "callcastlecare://",
+      "callcastlecare-driver://",
       "exp://",
       "http://localhost:8081",
     ],

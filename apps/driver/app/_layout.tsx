@@ -10,17 +10,15 @@ export const unstable_settings = {
   initialRouteName: "(drawer)",
 };
 
-function StackLayout() {
-  return (
-    <Stack screenOptions={{}}>
-      <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
-      <Stack.Screen
-        name="modal"
-        options={{ presentation: "modal", title: "Modal" }}
-      />
-    </Stack>
-  );
-}
+const StackLayout = () => (
+  <Stack screenOptions={{}}>
+    <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
+    <Stack.Screen
+      name="modal"
+      options={{ presentation: "modal", title: "Modal" }}
+    />
+  </Stack>
+);
 
 export default function Layout() {
   return (

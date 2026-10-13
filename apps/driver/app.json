@@ -1,13 +1,13 @@
 {
   "expo": {
-    "scheme": "callcastlecare",
+    "scheme": "callcastlecare-driver",
     "userInterfaceStyle": "automatic",
     "orientation": "default",
     "web": {
       "bundler": "metro"
     },
-    "name": "callcastlecare",
-    "slug": "callcastlecare",
+    "name": "CastleCare Driver",
+    "slug": "callcastlecare-driver",
     "plugins": ["expo-font"],
     "experiments": {
       "typedRoutes": true,

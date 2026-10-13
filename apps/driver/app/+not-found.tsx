@@ -19,7 +19,7 @@ export default function NotFoundScreen() {
               Page Not Found
             </Text>
             <Text className="text-muted text-sm text-center mb-4">
-              The page you're looking for doesn't exist.
+              The page you&apos;re looking for doesn&apos;t exist.
             </Text>
             <Link href="/" asChild>
               <Button size="sm">Go Home</Button>
