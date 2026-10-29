@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     BETTER_AUTH_SECRET: "test-secret-for-checkout-claim-routes-1234",
     RESEND_API_KEY: undefined as string | undefined,
   },
+  getStripeClient: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -143,6 +144,7 @@ vi.mock("../lib/integrations/rentcast", () => ({
 }));
 
 vi.mock("../lib/integrations/stripe-client", () => ({
+  getStripeClient: mocks.getStripeClient,
   getStripeMode: vi.fn(() => "test"),
   isStripeMockMode: vi.fn(() => true),
 }));
@@ -588,6 +590,69 @@ describe("POST /checkout/provider", () => {
         }),
       })
     );
+  });
+
+  it("reuses an open verification session instead of creating another", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_open_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockResolvedValue({
+            status: "open",
+            url: "https://stripe.test/open",
+          }),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      url: "https://stripe.test/open",
+    });
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("blocks resume while a completed delayed payment is still unsettled", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_complete_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockResolvedValue({
+            payment_status: "unpaid",
+            status: "complete",
+          }),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
   });
 
   it("does not let a paid provider start a second verification charge", async () => {

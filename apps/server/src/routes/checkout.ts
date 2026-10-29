@@ -663,6 +663,25 @@ const handleCheckoutSessionCompleted = async (event: StripeWebhookEvent) => {
   });
 };
 
+const clearProviderVerificationSession = async (event: StripeWebhookEvent) => {
+  const metadata = getObjectMetadata(event.data.object);
+  if (metadata?.type !== "provider_express_onboarding") {
+    return;
+  }
+  const email = getStringField(metadata.email);
+  if (!email) {
+    return;
+  }
+
+  await db
+    .update(workers)
+    .set({
+      providerVerificationSessionId: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(workers.email, email.toLowerCase()));
+};
+
 const handleCheckoutSessionAsyncPaymentFailed = async (
   event: StripeWebhookEvent
 ) => {
@@ -670,6 +689,8 @@ const handleCheckoutSessionAsyncPaymentFailed = async (
   if (!stripeCheckoutSessionId) {
     return;
   }
+
+  await clearProviderVerificationSession(event);
 
   await db
     .update(checkoutSessions)
@@ -753,6 +774,8 @@ const handleCheckoutSessionExpired = async (event: StripeWebhookEvent) => {
   if (!stripeSessionId) {
     return;
   }
+
+  await clearProviderVerificationSession(event);
 
   await db
     .update(checkoutSessions)
@@ -2186,6 +2209,18 @@ export const checkoutRoutes = new Hono<AppEnv>()
         : null;
       if (existingSession?.status === "open" && existingSession.url) {
         return c.json({ url: existingSession.url }, 200);
+      }
+      if (
+        existingSession?.status === "complete" &&
+        existingSession.payment_status !== "paid"
+      ) {
+        return c.json(
+          {
+            error:
+              "Verification payment is still processing. Try again after it settles.",
+          },
+          409
+        );
       }
     }
 

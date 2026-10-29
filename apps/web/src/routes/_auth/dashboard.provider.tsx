@@ -94,6 +94,15 @@ interface ConnectStatus {
   transferCapabilityStatus?: string | null;
 }
 
+const getSetupFeeLabel = (status: ConnectStatus | null) => {
+  if (!status) {
+    return "Checking...";
+  }
+  return status.providerVerificationPaidAt === null
+    ? "Payment due"
+    : "Authorized";
+};
+
 const getConnectStatusLabel = (status: string | undefined) => {
   if (status === "ready") {
     return "Ready for payouts";
@@ -375,9 +384,7 @@ const ProviderStatusTracker = ({
         </p>
         <p className="mt-1 flex items-center gap-1 font-black text-emerald-900">
           <CheckCircle2 className="size-4 text-emerald-600" />
-          {connectStatus?.providerVerificationPaidAt === null
-            ? "Payment due"
-            : "Authorized"}
+          {getSetupFeeLabel(connectStatus)}
         </p>
       </div>
 
