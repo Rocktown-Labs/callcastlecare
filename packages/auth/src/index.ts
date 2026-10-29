@@ -77,6 +77,17 @@ const authAllowedHosts = [
   "*.workers.dev",
 ];
 
+const isCrossSiteDeployment = (origin: string) => {
+  try {
+    const { hostname } = new URL(origin);
+    return (
+      hostname.endsWith(".workers.dev") || hostname.endsWith(".vercel.app")
+    );
+  } catch {
+    return false;
+  }
+};
+
 const createAuth = (config: AuthConfig, database: Database) => {
   const stripePlugin = createStripePlugin(config);
 
@@ -84,7 +95,10 @@ const createAuth = (config: AuthConfig, database: Database) => {
     advanced: {
       defaultCookieAttributes: {
         httpOnly: true,
-        sameSite: "none",
+        // Production web and API share the callcastlecare.com site, so Lax is
+        // enough and blocks cross-site state-changing requests. Preview hosts
+        // are different sites (workers.dev/vercel.app), so those keep None.
+        sameSite: isCrossSiteDeployment(config.CORS_ORIGIN) ? "none" : "lax",
         secure: true,
       },
       trustedProxyHeaders: true,

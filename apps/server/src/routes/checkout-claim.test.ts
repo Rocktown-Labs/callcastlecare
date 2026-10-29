@@ -9,6 +9,7 @@ import { checkoutRoutes } from "./checkout";
 const mocks = vi.hoisted(() => ({
   checkoutItemsFindMany: vi.fn(),
   checkoutSessionFindFirst: vi.fn(),
+  createStripeCheckoutSession: vi.fn(),
   createVerificationOTP: vi.fn(),
   customerFindFirst: vi.fn(),
   dbAddressFindFirst: vi.fn(),
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   ordersFindMany: vi.fn(),
   retrieveStripeSession: vi.fn(),
   sendAuthOtpEmail: vi.fn(),
+  signUpEmail: vi.fn(),
   userFindFirst: vi.fn(),
 }));
 
@@ -74,7 +76,7 @@ vi.mock("@callcastlecare/auth", () => ({
   auth: {
     api: {
       createVerificationOTP: mocks.createVerificationOTP,
-      signUpEmail: vi.fn(),
+      signUpEmail: mocks.signUpEmail,
     },
   },
 }));
@@ -139,7 +141,7 @@ vi.mock("../lib/integrations/stripe-connect", () => ({
 }));
 
 vi.mock("../lib/integrations/stripe-payments", () => ({
-  createStripeCheckoutSession: vi.fn(),
+  createStripeCheckoutSession: mocks.createStripeCheckoutSession,
   getOrCreateStripeCustomer: vi.fn(),
   parseStripeWebhookEvent: vi.fn(),
   retrieveStripeCheckoutSession: mocks.retrieveStripeSession,
@@ -183,6 +185,16 @@ const buildApp = (userId: string | null = null) => {
       role: null,
     });
     c.set("session", { id: "session" });
+    return await next();
+  });
+  return app.route("/checkout", checkoutRoutes);
+};
+
+const buildGuestApp = () => {
+  const app = new Hono<AppEnv>().use("*", async (c, next) => {
+    c.set("requestId", "test-request");
+    c.set("user", null);
+    c.set("session", null);
     return await next();
   });
   return app.route("/checkout", checkoutRoutes);
@@ -473,5 +485,112 @@ describe("POST /checkout/send-login-code", () => {
     expect(await response.json()).toEqual({
       error: "Sign-in code could not be sent",
     });
+  });
+});
+
+describe("POST /checkout/provider", () => {
+  beforeEach(() => {
+    mocks.createStripeCheckoutSession.mockResolvedValue({
+      id: "cs_provider_1",
+      mode: "payment",
+      subscriptionId: null,
+      url: "https://stripe.test/provider",
+    });
+    mocks.signUpEmail.mockResolvedValue({
+      user: {
+        email: "provider@example.com",
+        id: "user_provider_1",
+        name: "Jamie Provider",
+      },
+    });
+  });
+
+  it("requires a password for a new provider account", async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(400);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+  });
+
+  it("rejects an existing email instead of attaching provider onboarding", async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      id: "user_existing",
+    });
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        password: "chosen-password",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(409);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects a guest using a saved address id", async () => {
+    const response = await buildGuestApp().request("/checkout/confirm", {
+      body: JSON.stringify({
+        addressId: 11,
+        contact: {
+          email: "victim@example.com",
+          name: "Victim Customer",
+          phone: "5015550101",
+        },
+        items: [{ itemKind: "lawncare", planId: "groundskeeper-one-time" }],
+        paymentOption: "pay_full",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "Sign in to book with a saved address.",
+    });
+    expect(mocks.dbAddressFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("uses the applicant's password and never a hardcoded default", async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        password: "chosen-password",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.signUpEmail).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        email: "provider@example.com",
+        password: "chosen-password",
+      }),
+    });
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
   });
 });

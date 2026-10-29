@@ -1,10 +1,9 @@
 import { db, desc, eq } from "@callcastlecare/db";
 import { laundryBags } from "@callcastlecare/db/schema/index";
-import { env } from "@callcastlecare/env/server";
-import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
 
+import { requireAdmin } from "../lib/admin";
 import { logger } from "../lib/logger";
 import type { AppEnv } from "../types";
 
@@ -19,22 +18,6 @@ const createBagsSchema = z.object({
     .default("CC")
     .transform((value) => value.toUpperCase()),
 });
-
-const requireAdmin = (c: Context<AppEnv>) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  const isAdmin =
-    user.role === "admin" ||
-    user.email.toLowerCase() === env.ADMIN_EMAIL.toLowerCase();
-  if (!isAdmin) {
-    return c.json({ error: "forbidden" }, 403);
-  }
-
-  return null;
-};
 
 const buildBagCode = (prefix: string, sequence: number) =>
   `${prefix}-${String(sequence).padStart(5, "0")}`;

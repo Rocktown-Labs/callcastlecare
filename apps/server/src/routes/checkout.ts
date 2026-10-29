@@ -410,32 +410,28 @@ const finalizeFromMetadata = async (input: {
   return true;
 };
 
-const PROVIDER_TEMP_PASSWORD = "TempPassword123!";
-
 const getProviderPlanLabel = (plan: string) =>
   plan === "pro" ? "CastleCare Pro" : "Standard Provider";
 
-const getOrCreateProviderUser = async (input: {
+const getProviderUserByEmail = (email: string) =>
+  db.query.user.findFirst({
+    where: eq(authUsers.email, email.trim().toLowerCase()),
+  });
+
+const createProviderUser = async (input: {
   email: string;
   firstName: string;
   lastName: string;
-  password?: string;
+  password: string;
 }) => {
   const normalizedEmail = input.email.trim().toLowerCase();
-
-  const existingUser = await db.query.user.findFirst({
-    where: eq(authUsers.email, normalizedEmail),
-  });
-  if (existingUser) {
-    return existingUser;
-  }
 
   const signup = await auth.api.signUpEmail({
     body: {
       callbackURL: "/dashboard/provider",
       email: normalizedEmail,
       name: `${input.firstName} ${input.lastName}`.trim(),
-      password: input.password ?? PROVIDER_TEMP_PASSWORD,
+      password: input.password,
     },
   });
 
@@ -458,11 +454,16 @@ const handleProviderExpressOnboarding = async (input: {
 }) => {
   const normalizedEmail = input.email.trim().toLowerCase();
 
-  const user = await getOrCreateProviderUser({
-    email: normalizedEmail,
-    firstName: input.firstName,
-    lastName: input.lastName,
-  });
+  const user = await getProviderUserByEmail(normalizedEmail);
+  if (!user) {
+    logger.error(
+      {
+        email: normalizedEmail,
+      },
+      "provider:checkout_user_missing"
+    );
+    return;
+  }
 
   const rows = await db
     .insert(workers)
@@ -1219,7 +1220,7 @@ const providerCheckoutSchema = z.object({
   email: z.string().email(),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
-  password: z.string().min(8).optional(),
+  password: z.string().min(8).max(128),
   plan: z.string().default("standard_provider"),
 });
 
@@ -1548,6 +1549,7 @@ const validateCheckoutPaymentOption = async (input: ParsedCheckoutConfirm) => {
   return { error: null, hasRecurringCheckout } as const;
 };
 
+// eslint-disable-next-line complexity -- Checkout confirmation keeps validation, pricing, and payment setup in one auditable flow.
 const handleCheckoutConfirm = async (c: HonoContext) => {
   const body = await c.req.json();
   const parsed = checkoutConfirmRequestSchema.safeParse(body);
@@ -1559,6 +1561,14 @@ const handleCheckoutConfirm = async (c: HonoContext) => {
   if (paymentValidation.error) {
     return c.json({ error: paymentValidation.error }, 409);
   }
+
+  // A saved address id is only meaningful to the signed-in owner. Guest
+  // checkout must provide the address text, otherwise knowing an email and a
+  // sequential address id would expose another customer's saved address.
+  if (parsed.data.addressId && !c.get("user")) {
+    return c.json({ error: "Sign in to book with a saved address." }, 401);
+  }
+
   const { hasRecurringCheckout } = paymentValidation;
   const customer = await getCheckoutCustomer(c, parsed.data);
   const addressResult = await resolveCheckoutAddress({
@@ -2045,12 +2055,38 @@ export const checkoutRoutes = new Hono<AppEnv>()
     }
 
     const { email, firstName, lastName, password, plan } = parsed.data;
-    const providerUser = await getOrCreateProviderUser({
-      email,
-      firstName,
-      lastName,
-      ...(password ? { password } : {}),
-    });
+    const existingUser = await getProviderUserByEmail(email);
+    if (existingUser) {
+      return c.json(
+        {
+          error:
+            "An account with this email already exists. Sign in to continue provider onboarding.",
+        },
+        409
+      );
+    }
+
+    let providerUser;
+    try {
+      providerUser = await createProviderUser({
+        email,
+        firstName,
+        lastName,
+        password,
+      });
+    } catch (error) {
+      const racedUser = await getProviderUserByEmail(email);
+      if (racedUser) {
+        return c.json(
+          {
+            error:
+              "An account with this email already exists. Sign in to continue provider onboarding.",
+          },
+          409
+        );
+      }
+      throw error;
+    }
     const origin = getCheckoutOrigin(c);
     const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}&type=provider&plan=${encodeURIComponent(plan)}`;
     const cancelUrl = `${origin}/earn#apply?checkout=cancelled`;

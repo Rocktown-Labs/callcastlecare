@@ -27,9 +27,9 @@ import {
   workers,
 } from "@callcastlecare/db/schema/index";
 import { env } from "@callcastlecare/env/server";
-import type { Context } from "hono";
 import { Hono } from "hono";
 
+import { requireAdmin } from "../lib/admin";
 import {
   getGroupStatus,
   getOrderGroupKey,
@@ -87,24 +87,6 @@ type OrderStatus =
 const parsePositiveId = (value: string) => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-};
-
-const requireAdmin = (c: Context<AppEnv>) => {
-  const user = c.get("user");
-
-  if (!user) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  const adminEmail = env.ADMIN_EMAIL.toLowerCase();
-  const isAdminEmail = user.email.toLowerCase() === adminEmail;
-  const isAdminRole = user.role === "admin";
-
-  if (!(isAdminEmail || isAdminRole)) {
-    return c.json({ error: "forbidden" }, 403);
-  }
-
-  return null;
 };
 
 const normalizeCatalogRow = (row: typeof stripeCatalogItems.$inferSelect) => ({

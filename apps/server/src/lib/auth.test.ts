@@ -35,7 +35,8 @@ vi.mock("@callcastlecare/db/schema/index", () => ({
 
 vi.mock("./logger", () => ({ logger: mocks.logger }));
 
-const { getOrCreateCustomerForCheckoutContact } = await import("./auth");
+const { getOrCreateCustomerForCheckoutContact, toPublicSession, toPublicUser } =
+  await import("./auth");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -93,5 +94,42 @@ describe("getOrCreateCustomerForCheckoutContact", () => {
     expect(customer).toBe(existingCustomer);
     expect(mocks.authCreateUser).not.toHaveBeenCalled();
     expect(mocks.dbInsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("public session serialization", () => {
+  it("omits the bearer-equivalent session token", () => {
+    const session = toPublicSession({
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      id: "session_1",
+      impersonatedBy: null,
+      userId: "user_1",
+    });
+
+    expect(session).toEqual({
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      id: "session_1",
+      impersonatedBy: null,
+      userId: "user_1",
+    });
+    expect("token" in session).toBe(false);
+  });
+
+  it("returns only display-safe user fields", () => {
+    expect(
+      toPublicUser({
+        email: "customer@example.com",
+        id: "user_1",
+        image: null,
+        name: "Taylor Customer",
+        role: "user",
+      })
+    ).toEqual({
+      email: "customer@example.com",
+      id: "user_1",
+      image: null,
+      name: "Taylor Customer",
+      role: "user",
+    });
   });
 });

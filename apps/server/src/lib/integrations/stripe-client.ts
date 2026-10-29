@@ -84,7 +84,8 @@ export const getStripeWebhookUrl = (
 };
 
 export const isStripeMockMode = () =>
-  env.NODE_ENV !== "production" && !isStripeSecretUsable();
+  (env.NODE_ENV === "development" || env.NODE_ENV === "test") &&
+  !isStripeSecretUsable();
 
 export const getStripeIdempotencyKey = (...parts: string[]) =>
   `castlecare:${getStripeMode()}:${parts.join(":")}`;

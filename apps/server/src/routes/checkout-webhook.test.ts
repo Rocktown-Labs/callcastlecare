@@ -202,7 +202,12 @@ describe("provider express onboarding webhook", () => {
     });
   });
 
-  it("creates the provider user and worker record from checkout metadata", async () => {
+  it("creates the worker record for the account created at checkout", async () => {
+    mocks.dbQueryUserFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      id: "user_provider_1",
+    });
+
     const response = await app.request("/webhook/stripe", {
       body: JSON.stringify(buildProviderCheckoutEvent()),
       headers: { "content-type": "application/json" },
@@ -213,17 +218,7 @@ describe("provider express onboarding webhook", () => {
     expect(await response.json()).toEqual({ received: true });
 
     expect(mocks.dbQueryUserFindFirst).toHaveBeenCalledTimes(1);
-
-    expect(mocks.signUpEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          callbackURL: "/dashboard/provider",
-          email: "provider@example.com",
-          name: "Jamie Provider",
-          password: "TempPassword123!",
-        }),
-      })
-    );
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
 
     expect(mocks.dbInsert).toHaveBeenCalledWith(expect.objectContaining({}));
     expect(mocks.dbInsertValues).toHaveBeenCalledWith(
@@ -244,6 +239,11 @@ describe("provider express onboarding webhook", () => {
   });
 
   it("sends the ProviderApplicationReceivedEmail", async () => {
+    mocks.dbQueryUserFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      id: "user_provider_1",
+    });
+
     const response = await app.request("/webhook/stripe", {
       body: JSON.stringify(buildProviderCheckoutEvent()),
       headers: { "content-type": "application/json" },
@@ -284,6 +284,24 @@ describe("provider express onboarding webhook", () => {
     expect(mocks.dbInsert).toHaveBeenCalled();
     expect(mocks.dbInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user_existing" })
+    );
+  });
+
+  it("does not create an account when the checkout user is missing", async () => {
+    const response = await app.request("/webhook/stripe", {
+      body: JSON.stringify(buildProviderCheckoutEvent()),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+    expect(mocks.dbInsertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ email: "provider@example.com" })
+    );
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "provider@example.com" }),
+      "provider:checkout_user_missing"
     );
   });
 

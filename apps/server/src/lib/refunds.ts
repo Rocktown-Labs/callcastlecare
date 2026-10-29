@@ -1,4 +1,4 @@
-import { db, eq } from "@callcastlecare/db";
+import { db, eq, sql } from "@callcastlecare/db";
 import type { orders } from "@callcastlecare/db/schema/index";
 import { payouts, stripeRefunds } from "@callcastlecare/db/schema/index";
 
@@ -57,57 +57,75 @@ export const createAdminRefund = async (input: {
     throw new RefundError("Order has no Stripe payment to refund", 409);
   }
 
-  const existingRefunds = await db.query.stripeRefunds.findMany({
-    where: eq(stripeRefunds.orderId, input.order.id),
-  });
-  const refundedCents = existingRefunds.reduce(
-    (total, refund) => total + refund.amountCents,
-    0
-  );
-  const amountCents = input.amountCents ?? input.order.totalPriceCents;
-  if (
-    amountCents <= 0 ||
-    refundedCents + amountCents > input.order.totalPriceCents
-  ) {
-    throw new RefundError("Refund exceeds the remaining order balance", 409);
-  }
-
   const stripe = getStripeClient();
   if (!stripe) {
     throw new RefundError("Stripe payments are not configured", 503);
   }
+  const paymentIntentId = input.order.stripePaymentIntentId;
 
-  const refund = await stripe.refunds.create(
-    {
-      amount: amountCents,
-      metadata: {
-        castlecareOrderId: String(input.order.id),
-      },
-      payment_intent: input.order.stripePaymentIntentId,
-      reason: "requested_by_customer",
-    },
-    getStripeRequestOptions(
-      "refund",
-      String(input.order.id),
-      String(amountCents)
-    )
+  // Serialize refunds for one order so two admins cannot both pass the
+  // remaining-balance check and over-refund the payment intent.
+  const { amountCents, createdRefund, stripeRefundId } = await db.transaction(
+    async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${input.order.id})`);
+
+      const existingRefunds = await tx.query.stripeRefunds.findMany({
+        where: eq(stripeRefunds.orderId, input.order.id),
+      });
+      const refundedCents = existingRefunds.reduce(
+        (total, refund) => total + refund.amountCents,
+        0
+      );
+      const requestedCents = input.amountCents ?? input.order.totalPriceCents;
+      if (
+        requestedCents <= 0 ||
+        refundedCents + requestedCents > input.order.totalPriceCents
+      ) {
+        throw new RefundError(
+          "Refund exceeds the remaining order balance",
+          409
+        );
+      }
+
+      const refund = await stripe.refunds.create(
+        {
+          amount: requestedCents,
+          metadata: {
+            castlecareOrderId: String(input.order.id),
+          },
+          payment_intent: paymentIntentId,
+          reason: "requested_by_customer",
+        },
+        getStripeRequestOptions(
+          "refund",
+          String(input.order.id),
+          String(requestedCents)
+        )
+      );
+      const [created] = await tx
+        .insert(stripeRefunds)
+        .values({
+          amountCents: requestedCents,
+          metadataJson: {
+            adminEmail: input.adminEmail,
+            stripeStatus: refund.status,
+          },
+          orderId: input.order.id,
+          reason: input.reason || null,
+          status: refund.status ?? "pending",
+          stripeRefundId: refund.id,
+          updatedAt: new Date(),
+        })
+        .onConflictDoNothing({ target: stripeRefunds.stripeRefundId })
+        .returning();
+
+      return {
+        amountCents: requestedCents,
+        createdRefund: created ?? null,
+        stripeRefundId: refund.id,
+      };
+    }
   );
-  const [createdRefund] = await db
-    .insert(stripeRefunds)
-    .values({
-      amountCents,
-      metadataJson: {
-        adminEmail: input.adminEmail,
-        stripeStatus: refund.status,
-      },
-      orderId: input.order.id,
-      reason: input.reason || null,
-      status: refund.status ?? "pending",
-      stripeRefundId: refund.id,
-      updatedAt: new Date(),
-    })
-    .onConflictDoNothing({ target: stripeRefunds.stripeRefundId })
-    .returning();
 
   await reversePayoutIfNeeded({ amountCents, orderId: input.order.id });
   logger.info(
@@ -115,9 +133,9 @@ export const createAdminRefund = async (input: {
       adminEmail: input.adminEmail,
       amountCents,
       orderId: input.order.id,
-      stripeRefundId: refund.id,
+      stripeRefundId,
     },
     "admin:refund:created"
   );
-  return createdRefund ?? null;
+  return createdRefund;
 };

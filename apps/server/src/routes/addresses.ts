@@ -4,6 +4,7 @@ import { addresses } from "@callcastlecare/db/schema/index";
 import { Hono } from "hono";
 
 import { getOrCreateCustomerForUser, requireUser } from "../lib/auth";
+import { verifyAddressWithRadar } from "../lib/integrations/radar";
 import { createAddressRecord } from "../lib/orders";
 import type { AppEnv } from "../types";
 import {
@@ -80,27 +81,27 @@ export const addressesRoutes = new Hono<AppEnv>()
 
     if (payload.street && payload.city && payload.state && payload.zip) {
       const country = payload.country ?? "US";
+      const formattedAddress =
+        payload.formattedAddress ??
+        buildFormattedAddress({
+          city: payload.city,
+          country,
+          state: payload.state,
+          street: payload.street,
+          zip: payload.zip,
+        });
+      const verified = await verifyAddressWithRadar(formattedAddress);
       const address = await createAddressRecord({
         city: payload.city,
         country,
         customerId: customer.id,
-        formattedAddress:
-          payload.formattedAddress ??
-          buildFormattedAddress({
-            city: payload.city,
-            country,
-            state: payload.state,
-            street: payload.street,
-            zip: payload.zip,
-          }),
+        formattedAddress,
         instructions: payload.instructions ?? null,
         isDefault: payload.isDefault,
         label: payload.label,
-        latitude: payload.latitude ?? null,
-        longitude: payload.longitude ?? null,
-        radarGeocodeJson: {
-          source: "client-validated",
-        },
+        latitude: verified.latitude,
+        longitude: verified.longitude,
+        radarGeocodeJson: verified.raw,
         state: payload.state,
         street: payload.street,
         zip: payload.zip,
@@ -115,19 +116,19 @@ export const addressesRoutes = new Hono<AppEnv>()
       const state = payload.state ?? parts[2]?.split(" ")[0] ?? "AR";
       const street = payload.street ?? parts[0] ?? payload.address;
       const zip = payload.zip ?? parts[2]?.split(" ")[1] ?? "72201";
+      const formattedAddress = payload.formattedAddress ?? payload.address;
+      const verified = await verifyAddressWithRadar(formattedAddress);
       const address = await createAddressRecord({
         city,
         country: payload.country ?? "US",
         customerId: customer.id,
-        formattedAddress: payload.formattedAddress ?? payload.address,
+        formattedAddress,
         instructions: payload.instructions ?? null,
         isDefault: payload.isDefault,
         label: payload.label,
-        latitude: payload.latitude ?? null,
-        longitude: payload.longitude ?? null,
-        radarGeocodeJson: {
-          source: "manual-entry",
-        },
+        latitude: verified.latitude,
+        longitude: verified.longitude,
+        radarGeocodeJson: verified.raw,
         state,
         street,
         zip,

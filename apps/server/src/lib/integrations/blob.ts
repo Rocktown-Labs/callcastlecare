@@ -18,7 +18,7 @@ export const createMediaStoragePath = (input: {
   const orderSegment = input.orderId ? `order-${input.orderId}` : "order-none";
   const legSegment = input.legId ? `leg-${input.legId}` : "leg-none";
   const timestamp = Date.now();
-  const random = Math.random().toString(36).slice(2, 10);
+  const random = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   return `callcastlecare-media/${orderSegment}/${legSegment}/${input.mediaType}/${timestamp}-${random}.${input.extension}`;
 };
 
