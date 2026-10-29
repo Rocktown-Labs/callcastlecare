@@ -61,7 +61,10 @@ export const isOriginAllowed = (input: {
 };
 
 const isWebhookPath = (path: string) =>
-  path.includes("/webhooks/") || path.startsWith("/webhooks");
+  path.includes("/webhooks/") ||
+  path.includes("/webhook/") ||
+  path.startsWith("/webhooks") ||
+  path.endsWith("/webhook");
 
 const isAuthPath = (path: string) =>
   path.startsWith("/api/auth") || path.startsWith("/auth");
