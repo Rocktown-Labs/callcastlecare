@@ -2076,19 +2076,9 @@ export const checkoutRoutes = new Hono<AppEnv>()
     let createdProviderUser = false;
 
     if (existingUser) {
-      // Only allow an unverified account to resume its own abandoned checkout.
-      // Verified accounts must sign in, and a wrong password cannot attach
-      // provider onboarding to someone else's identity.
-      if (existingUser.emailVerified) {
-        return c.json(
-          {
-            error:
-              "An account with this email already exists. Sign in to continue provider onboarding.",
-          },
-          409
-        );
-      }
-
+      // A matching password proves ownership, so an applicant can resume an
+      // abandoned checkout without creating a second account. Accounts with
+      // no password (OAuth/OTP) or a different password must sign in instead.
       const passwordMatches = await providerPasswordMatches(
         existingUser.id,
         password
