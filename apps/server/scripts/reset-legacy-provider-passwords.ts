@@ -1,5 +1,6 @@
+import "dotenv/config";
 import { createDb, eq } from "@callcastlecare/db";
-import { account } from "@callcastlecare/db/schema/index";
+import { account, session } from "@callcastlecare/db/schema/index";
 import { verifyPassword } from "better-auth/crypto";
 
 const LEGACY_PROVIDER_PASSWORD = "TempPassword123!";
@@ -33,7 +34,10 @@ const results = await Promise.all(
       .update(account)
       .set({ password: null, updatedAt: new Date() })
       .where(eq(account.id, credential.id));
-    console.log(`Reset legacy provider password for account ${credential.id}`);
+    await db.delete(session).where(eq(session.userId, credential.userId));
+    console.log(
+      `Reset legacy provider password and sessions for account ${credential.id}`
+    );
     return true;
   })
 );
