@@ -72,7 +72,7 @@ const settlePayoutRecord = async (claimed: typeof payouts.$inferSelect) => {
   if (!isReady || !worker?.stripeAccountId) {
     const [pending] = await db
       .update(payouts)
-      .set({ status: "pending" })
+      .set({ claimedAt: null, status: "pending" })
       .where(and(eq(payouts.id, claimed.id), eq(payouts.status, "processing")))
       .returning();
     return pending ?? claimed;
@@ -87,6 +87,7 @@ const settlePayoutRecord = async (claimed: typeof payouts.$inferSelect) => {
   const [settled] = await db
     .update(payouts)
     .set({
+      claimedAt: null,
       failureReason: transfer.success ? null : "stripe_transfer_failed",
       paidAt: transfer.success ? new Date() : null,
       providerPayoutId: transfer.providerPayoutId,
@@ -120,6 +121,7 @@ export const createCompletionPayoutRecords = async (input: {
       .insert(payouts)
       .values({
         amountCents: payoutAmountCents,
+        claimedAt: new Date(),
         orderId: input.orderId,
         status: "processing",
         workerId: input.workerId,
@@ -177,7 +179,7 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
       and(
         eq(payouts.workerId, workerId),
         eq(payouts.status, "processing"),
-        lt(payouts.createdAt, new Date(Date.now() - STALE_PAYOUT_CLAIM_MS))
+        lt(payouts.claimedAt, new Date(Date.now() - STALE_PAYOUT_CLAIM_MS))
       )
     );
 
@@ -193,7 +195,7 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
 
       const [claimed] = await db
         .update(payouts)
-        .set({ status: "processing" })
+        .set({ claimedAt: new Date(), status: "processing" })
         .where(and(eq(payouts.id, payout.id), eq(payouts.status, "pending")))
         .returning();
       if (!claimed) {
@@ -209,6 +211,7 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
       const [settled] = await db
         .update(payouts)
         .set({
+          claimedAt: null,
           failureReason: transfer.success ? null : "stripe_transfer_failed",
           paidAt: transfer.success ? new Date() : null,
           providerPayoutId: transfer.providerPayoutId,

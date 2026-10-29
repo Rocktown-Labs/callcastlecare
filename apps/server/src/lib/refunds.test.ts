@@ -12,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   dbDelete: vi.fn(),
   dbInsert: vi.fn(),
   dbQueryPayoutsFindFirst: vi.fn(),
+  dbQueryRefundsFindFirst: vi.fn(),
   dbQueryRefundsFindMany: vi.fn(),
   dbUpdate: vi.fn(),
+  reverseWorkerTransfer: vi.fn(),
 }));
 
 vi.mock("@callcastlecare/db", () => ({
@@ -23,7 +25,10 @@ vi.mock("@callcastlecare/db", () => ({
     insert: mocks.dbInsert,
     query: {
       payouts: { findFirst: mocks.dbQueryPayoutsFindFirst },
-      stripeRefunds: { findMany: mocks.dbQueryRefundsFindMany },
+      stripeRefunds: {
+        findFirst: mocks.dbQueryRefundsFindFirst,
+        findMany: mocks.dbQueryRefundsFindMany,
+      },
     },
     update: mocks.dbUpdate,
   },
@@ -41,7 +46,7 @@ vi.mock("./integrations/stripe-client", () => ({
 }));
 
 vi.mock("./integrations/stripe-connect", () => ({
-  reverseWorkerTransfer: vi.fn(),
+  reverseWorkerTransfer: mocks.reverseWorkerTransfer,
 }));
 
 vi.mock("./logger", () => ({
@@ -124,5 +129,33 @@ describe("createAdminRefund", () => {
       expect(rejection.reason).toBeInstanceOf(RefundError);
       expect(rejection.reason.statusCode).toBe(409);
     }
+  });
+
+  it("uses the webhook row when Stripe refund id was already recorded", async () => {
+    const webhookRow = {
+      ...claimRow,
+      id: 9,
+      status: "succeeded",
+      stripeRefundId: "re_1",
+    };
+    mocks.dbUpdate.mockReturnValue({
+      set: () => ({
+        where: () => ({
+          returning: () => {
+            throw Object.assign(new Error("duplicate key"), { code: "23505" });
+          },
+        }),
+      }),
+    });
+    mocks.dbQueryRefundsFindFirst.mockResolvedValue(webhookRow);
+
+    const result = await createAdminRefund({
+      adminEmail: "admin@example.com",
+      order,
+    });
+
+    expect(result).toBe(webhookRow);
+    expect(mocks.createRefund).toHaveBeenCalledTimes(1);
+    expect(mocks.dbDelete).toHaveBeenCalled();
   });
 });

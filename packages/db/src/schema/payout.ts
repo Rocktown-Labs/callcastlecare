@@ -67,6 +67,7 @@ export const payouts = pgTable(
   "payouts",
   {
     amountCents: integer("amount_cents").notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

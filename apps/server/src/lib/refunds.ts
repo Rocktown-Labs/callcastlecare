@@ -12,6 +12,12 @@ import { logger } from "./logger";
 const STALE_REFUND_CLAIM_MS = 10 * 60 * 1000;
 const getRefundClaimId = (orderId: number) => `claim:${orderId}`;
 
+const isUniqueViolation = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  (error as { code?: unknown }).code === "23505";
+
 export class RefundError extends Error {
   statusCode: 404 | 409 | 503;
 
@@ -143,19 +149,33 @@ export const createAdminRefund = async (input: {
     throw error;
   }
 
-  const [createdRefund] = await db
-    .update(stripeRefunds)
-    .set({
-      metadataJson: {
-        adminEmail: input.adminEmail,
-        stripeStatus: refund.status,
-      },
-      status: refund.status ?? "pending",
-      stripeRefundId: refund.id,
-      updatedAt: new Date(),
-    })
-    .where(eq(stripeRefunds.id, claim.id))
-    .returning();
+  let createdRefund: typeof stripeRefunds.$inferSelect | null | undefined;
+  try {
+    [createdRefund] = await db
+      .update(stripeRefunds)
+      .set({
+        metadataJson: {
+          adminEmail: input.adminEmail,
+          stripeStatus: refund.status,
+        },
+        status: refund.status ?? "pending",
+        stripeRefundId: refund.id,
+        updatedAt: new Date(),
+      })
+      .where(eq(stripeRefunds.id, claim.id))
+      .returning();
+  } catch (error) {
+    if (!isUniqueViolation(error)) {
+      throw error;
+    }
+    // A webhook may have recorded the same Stripe refund first. Drop our
+    // placeholder and use the webhook row instead of failing after Stripe has
+    // already moved money.
+    await db.delete(stripeRefunds).where(eq(stripeRefunds.id, claim.id));
+    createdRefund = await db.query.stripeRefunds.findFirst({
+      where: eq(stripeRefunds.stripeRefundId, refund.id),
+    });
+  }
 
   await reversePayoutIfNeeded({
     amountCents: requestedCents,
