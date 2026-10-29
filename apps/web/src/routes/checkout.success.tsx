@@ -33,6 +33,7 @@ import { z } from "zod";
 
 import MarketingLayout from "@/components/home/marketing-layout";
 import { signInWithEmailOtp } from "@/lib/auth/email-otp";
+import { getServerUrl } from "@/lib/server-url";
 
 const searchSchema = z.object({
   plan: z.string().optional(),
@@ -379,10 +380,9 @@ const useCheckoutSuccessPayload = (input: {
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch(
-          `/api/v1/checkout/access-token?session_id=${encodeURIComponent(sessionId)}`,
-          { signal: controller.signal }
-        );
+        const url = new URL("/api/v1/checkout/access-token", getServerUrl());
+        url.searchParams.set("session_id", sessionId);
+        const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) {
           return;
         }
@@ -553,11 +553,14 @@ export const CheckoutSuccessPage = () => {
     setOtpError(null);
     setIsSendingOtp(true);
     try {
-      const response = await fetch("/api/v1/checkout/send-login-code", {
-        body: JSON.stringify({ sessionId: search.session_id }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
+      const response = await fetch(
+        new URL("/api/v1/checkout/send-login-code", getServerUrl()),
+        {
+          body: JSON.stringify({ sessionId: search.session_id }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        }
+      );
       const data = (await response.json()) as {
         error?: string;
         maskedEmail?: string;
