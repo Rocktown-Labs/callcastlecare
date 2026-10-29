@@ -7,7 +7,6 @@ import type { AppEnv } from "../types";
 import { checkoutRoutes } from "./checkout";
 
 const mocks = vi.hoisted(() => ({
-  accountFindFirst: vi.fn(),
   checkoutItemsFindMany: vi.fn(),
   checkoutSessionFindFirst: vi.fn(),
   createStripeCheckoutSession: vi.fn(),
@@ -29,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   sendAuthOtpEmail: vi.fn(),
   signUpEmail: vi.fn(),
   userFindFirst: vi.fn(),
-  verifyPassword: vi.fn(),
+  workersFindFirst: vi.fn(),
 }));
 
 vi.mock("@callcastlecare/db", () => ({
@@ -38,13 +37,13 @@ vi.mock("@callcastlecare/db", () => ({
     execute: vi.fn(),
     insert: vi.fn(),
     query: {
-      account: { findFirst: mocks.accountFindFirst },
       addresses: { findFirst: mocks.dbAddressFindFirst },
       checkoutItems: { findMany: mocks.checkoutItemsFindMany },
       checkoutSessions: { findFirst: mocks.checkoutSessionFindFirst },
       customers: { findFirst: mocks.customerFindFirst },
       orders: { findMany: mocks.ordersFindMany },
       user: { findFirst: mocks.userFindFirst },
+      workers: { findFirst: mocks.workersFindFirst },
     },
     transaction: vi.fn(),
     update: vi.fn(),
@@ -57,7 +56,6 @@ vi.mock("@callcastlecare/db", () => ({
 }));
 
 vi.mock("@callcastlecare/db/schema/index", () => ({
-  account: { providerId: "providerId", userId: "userId" },
   addresses: { id: "id" },
   checkoutDrafts: { id: "id" },
   checkoutItems: { checkoutSessionId: "checkoutSessionId" },
@@ -73,7 +71,7 @@ vi.mock("@callcastlecare/db/schema/index", () => ({
   stripeRefunds: { stripeRefundId: "stripeRefundId" },
   stripeWebhookEvents: { id: "id" },
   user: { email: "email" },
-  workers: { id: "id" },
+  workers: { id: "id", userId: "userId" },
 }));
 
 vi.mock("@callcastlecare/auth", () => ({
@@ -83,10 +81,6 @@ vi.mock("@callcastlecare/auth", () => ({
       signUpEmail: mocks.signUpEmail,
     },
   },
-}));
-
-vi.mock("better-auth/crypto", () => ({
-  verifyPassword: mocks.verifyPassword,
 }));
 
 vi.mock("@callcastlecare/auth/email", async (importOriginal) => {
@@ -108,7 +102,15 @@ vi.mock("@callcastlecare/env/server", () => ({
 vi.mock("../lib/auth", () => ({
   getOrCreateCustomerForCheckoutContact: vi.fn(),
   getOrCreateCustomerForUser: vi.fn(),
-  requireUser: vi.fn(),
+  requireUser: (c: {
+    get: (key: string) => unknown;
+    json: (body: unknown, status: 401) => Response;
+  }) => {
+    const user = c.get("user");
+    return user
+      ? { error: null, user }
+      : { error: c.json({ error: "unauthorized" }, 401), user: null };
+  },
 }));
 
 vi.mock("../lib/checkout-settings", () => ({
@@ -555,59 +557,48 @@ describe("POST /checkout/provider", () => {
     expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
   });
 
-  it("lets an unverified account resume its own abandoned checkout", async () => {
-    mocks.userFindFirst.mockResolvedValue({
-      email: "provider@example.com",
-      emailVerified: false,
-      id: "user_existing",
-    });
-    mocks.accountFindFirst.mockResolvedValue({
-      password: "hashed-password",
-    });
-    mocks.verifyPassword.mockResolvedValue(true);
+  it("lets an authenticated provider resume verification", async () => {
+    mocks.workersFindFirst.mockResolvedValue(null);
 
-    const response = await buildApp().request("/checkout/provider", {
-      body: JSON.stringify({
-        email: "provider@example.com",
-        firstName: "Jamie",
-        lastName: "Provider",
-        password: "chosen-password",
-        plan: "pro",
-      }),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-    });
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
 
     expect(response.status).toBe(200);
     expect(mocks.signUpEmail).not.toHaveBeenCalled();
-    expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerEmail: "owner@example.com",
+        metadata: expect.objectContaining({
+          providerUserId: "user_provider_1",
+          type: "provider_express_onboarding",
+        }),
+      })
+    );
   });
 
-  it("rejects an unverified account with the wrong password", async () => {
-    mocks.userFindFirst.mockResolvedValue({
-      email: "provider@example.com",
-      emailVerified: false,
-      id: "user_existing",
+  it("does not let a paid provider start a second verification charge", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationPaidAt: new Date(),
+      userId: "user_provider_1",
     });
-    mocks.accountFindFirst.mockResolvedValue({
-      password: "hashed-password",
-    });
-    mocks.verifyPassword.mockResolvedValue(false);
 
-    const response = await buildApp().request("/checkout/provider", {
-      body: JSON.stringify({
-        email: "provider@example.com",
-        firstName: "Jamie",
-        lastName: "Provider",
-        password: "wrong-password",
-        plan: "pro",
-      }),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-    });
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
 
     expect(response.status).toBe(409);
-    expect(mocks.signUpEmail).not.toHaveBeenCalled();
     expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
   });
 

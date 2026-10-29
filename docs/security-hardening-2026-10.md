@@ -5,10 +5,10 @@ A source-and-local security pass reviewed the web app, API, auth, database acces
 ## Fixed
 
 | Severity | Issue | Fix |
-|---|---|---|
+| --- | --- | --- |
 | High | Credentialed CORS reflected any `*.workers.dev` or substring-`localhost` origin | Exact allowlist in `apps/server/src/lib/origin.ts`; unsafe-method `originGuard` |
 | High | CSRF on cookie-authenticated JSON endpoints | Origin guard plus `SameSite=Lax` production cookies |
-| High | Provider checkout created accounts with `TempPassword123!` | Required applicant password; existing emails resume only with the matching password; webhook no longer creates users |
+| High | Provider checkout created accounts with `TempPassword123!` | Required applicant password; existing emails use an authenticated resume endpoint; webhook no longer creates users |
 | Medium | `GET /api/v1/me` exposed the session token | `toPublicSession` / `toPublicUser` projections |
 | Medium | Unauthenticated media upload to R2 | Auth plus target/path authorization; `crypto.randomUUID` path segment |
 | Medium | Any user could attach media to any order/leg | Ownership/assignment checks on upload and attach |

@@ -50,6 +50,9 @@ export const workers = pgTable(
       .notNull()
       .default("pending"),
     phone: text("phone").notNull(),
+    providerVerificationPaidAt: timestamp("provider_verification_paid_at", {
+      withTimezone: true,
+    }),
     serviceRadiusMiles: integer("service_radius_miles").notNull().default(10),
     servicesOffered: text("services_offered").array().notNull().default([]),
     stripeAccountApiVersion: text("stripe_account_api_version"),

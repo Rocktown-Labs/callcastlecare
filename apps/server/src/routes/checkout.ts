@@ -16,7 +16,6 @@ import {
 } from "@callcastlecare/auth/email";
 import { and, db, eq, gt, inArray, lt, sql } from "@callcastlecare/db";
 import {
-  account as authAccount,
   addresses,
   checkoutDrafts,
   checkoutItems,
@@ -36,7 +35,6 @@ import {
 } from "@callcastlecare/db/schema/index";
 import { renderProviderApplicationReceivedEmail } from "@callcastlecare/email";
 import { env } from "@callcastlecare/env/server";
-import { verifyPassword } from "better-auth/crypto";
 import { Hono } from "hono";
 import type { Context as HonoContext } from "hono";
 import { z } from "zod";
@@ -422,20 +420,6 @@ const getProviderUserByEmail = (email: string) =>
     where: eq(authUsers.email, email.trim().toLowerCase()),
   });
 
-const providerPasswordMatches = async (userId: string, password: string) => {
-  const credential = await db.query.account.findFirst({
-    where: and(
-      eq(authAccount.userId, userId),
-      eq(authAccount.providerId, "credential")
-    ),
-  });
-  if (!credential?.password) {
-    return false;
-  }
-
-  return verifyPassword({ hash: credential.password, password });
-};
-
 const createProviderUser = async (input: {
   email: string;
   firstName: string;
@@ -494,6 +478,7 @@ const handleProviderExpressOnboarding = async (input: {
       firstName: input.firstName,
       lastName: input.lastName,
       phone: "",
+      providerVerificationPaidAt: new Date(),
       serviceRadiusMiles: 10,
       servicesOffered: [],
       userId: user.id,
@@ -504,6 +489,7 @@ const handleProviderExpressOnboarding = async (input: {
           source: "express_onboarding_checkout",
           ...(input.plan ? { plan: input.plan } : {}),
         },
+        providerVerificationPaidAt: new Date(),
         updatedAt: new Date(),
       },
       target: workers.userId,
@@ -2078,14 +2064,29 @@ export const checkoutRoutes = new Hono<AppEnv>()
     let createdProviderUser = false;
 
     if (existingUser) {
-      // A matching password proves ownership, so an applicant can resume an
-      // abandoned checkout without creating a second account. Accounts with
-      // no password (OAuth/OTP) or a different password must sign in instead.
-      const passwordMatches = await providerPasswordMatches(
-        existingUser.id,
-        password
+      // Never verify a password on an unauthenticated endpoint: that would be
+      // an online password oracle for any email. Existing accounts resume
+      // through the authenticated /checkout/provider/resume route.
+      return c.json(
+        {
+          error:
+            "An account with this email already exists. Sign in and continue from the provider dashboard.",
+        },
+        409
       );
-      if (!passwordMatches) {
+    }
+
+    try {
+      providerUser = await createProviderUser({
+        email,
+        firstName,
+        lastName,
+        password,
+      });
+      createdProviderUser = true;
+    } catch (error) {
+      const racedUser = await getProviderUserByEmail(email);
+      if (racedUser) {
         return c.json(
           {
             error:
@@ -2094,29 +2095,7 @@ export const checkoutRoutes = new Hono<AppEnv>()
           409
         );
       }
-      providerUser = existingUser;
-    } else {
-      try {
-        providerUser = await createProviderUser({
-          email,
-          firstName,
-          lastName,
-          password,
-        });
-        createdProviderUser = true;
-      } catch (error) {
-        const racedUser = await getProviderUserByEmail(email);
-        if (racedUser) {
-          return c.json(
-            {
-              error:
-                "An account with this email already exists. Sign in to continue provider onboarding.",
-            },
-            409
-          );
-        }
-        throw error;
-      }
+      throw error;
     }
 
     const origin = getCheckoutOrigin(c);
@@ -2149,6 +2128,53 @@ export const checkoutRoutes = new Hono<AppEnv>()
       }
       throw error;
     }
+
+    return c.json({ url: stripeCheckoutSession.url }, 200);
+  })
+  .post("/provider/resume", async (c) => {
+    const userResult = requireUser(c);
+    if (userResult.error) {
+      return userResult.error;
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z
+      .object({ plan: z.string().trim().min(1).max(64).optional() })
+      .safeParse(body);
+    const plan = parsed.success
+      ? (parsed.data.plan ?? "standard_provider")
+      : "standard_provider";
+
+    const worker = await db.query.workers.findFirst({
+      where: eq(workers.userId, userResult.user.id),
+    });
+    if (worker?.providerVerificationPaidAt) {
+      return c.json({ error: "Provider verification is already paid." }, 409);
+    }
+
+    const [firstName = "", ...rest] = (userResult.user.name ?? "")
+      .trim()
+      .split(/\s+/u);
+    const lastName = rest.join(" ");
+    const origin = getCheckoutOrigin(c);
+    const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}&type=provider&plan=${encodeURIComponent(plan)}`;
+    const cancelUrl = `${origin}/dashboard/provider?checkout=cancelled`;
+
+    const stripeCheckoutSession = await createStripeCheckoutSession({
+      amountDueCents: 5000,
+      cancelUrl,
+      checkoutSessionId: Date.now(),
+      customerEmail: userResult.user.email,
+      metadata: {
+        email: userResult.user.email,
+        firstName,
+        lastName,
+        plan,
+        providerUserId: userResult.user.id,
+        type: "provider_express_onboarding",
+      },
+      successUrl,
+    });
 
     return c.json({ url: stripeCheckoutSession.url }, 200);
   })

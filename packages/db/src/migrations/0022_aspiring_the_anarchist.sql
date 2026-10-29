@@ -1,0 +1,2 @@
+ALTER TABLE "workers" ADD COLUMN "provider_verification_paid_at" timestamp with time zone;--> statement-breakpoint
+UPDATE "workers" SET "provider_verification_paid_at" = "created_at" WHERE "application_form_data"->>'source' = 'express_onboarding_checkout' AND "provider_verification_paid_at" IS NULL;
