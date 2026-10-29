@@ -287,6 +287,30 @@ describe("provider express onboarding webhook", () => {
     );
   });
 
+  it("does not onboard a provider from an unpaid delayed-method session", async () => {
+    mocks.dbQueryUserFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      id: "user_provider_1",
+    });
+    const event = buildProviderCheckoutEvent();
+    (event.data.object as Record<string, unknown>).payment_status = "unpaid";
+
+    const response = await app.request("/webhook/stripe", {
+      body: JSON.stringify(event),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.dbInsertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ email: "provider@example.com" })
+    );
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentStatus: "unpaid" }),
+      "stripe_webhook:checkout_not_paid"
+    );
+  });
+
   it("does not create an account when the checkout user is missing", async () => {
     const response = await app.request("/webhook/stripe", {
       body: JSON.stringify(buildProviderCheckoutEvent()),

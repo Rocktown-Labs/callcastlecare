@@ -59,6 +59,7 @@ import { sendEmail } from "../lib/integrations/email";
 import { verifyAddressWithRadar } from "../lib/integrations/radar";
 import { lookupPropertyWithRentCast } from "../lib/integrations/rentcast";
 import {
+  getStripeClient,
   getStripeMode,
   isStripeMockMode,
 } from "../lib/integrations/stripe-client";
@@ -479,6 +480,7 @@ const handleProviderExpressOnboarding = async (input: {
       lastName: input.lastName,
       phone: "",
       providerVerificationPaidAt: new Date(),
+      providerVerificationSessionId: null,
       serviceRadiusMiles: 10,
       servicesOffered: [],
       userId: user.id,
@@ -490,6 +492,7 @@ const handleProviderExpressOnboarding = async (input: {
           ...(input.plan ? { plan: input.plan } : {}),
         },
         providerVerificationPaidAt: new Date(),
+        providerVerificationSessionId: null,
         updatedAt: new Date(),
       },
       target: workers.userId,
@@ -586,10 +589,6 @@ const handleCheckoutSessionCompleted = async (event: StripeWebhookEvent) => {
   const checkoutObject = event.data.object;
   const metadata = getObjectMetadata(checkoutObject);
 
-  if (await handleProviderCheckoutCompleted(metadata)) {
-    return;
-  }
-
   const stripeCheckoutSessionId = getStripeObjectId(checkoutObject.id);
   const stripePaymentIntentId = getStripeObjectId(
     checkoutObject.payment_intent
@@ -603,6 +602,12 @@ const handleCheckoutSessionCompleted = async (event: StripeWebhookEvent) => {
       { paymentStatus, stripeCheckoutSessionId },
       "stripe_webhook:checkout_not_paid"
     );
+    return;
+  }
+
+  // Provider verification is a one-time payment. Do not mark it paid from a
+  // completed-but-unpaid delayed-method session.
+  if (await handleProviderCheckoutCompleted(metadata)) {
     return;
   }
 
@@ -2129,6 +2134,26 @@ export const checkoutRoutes = new Hono<AppEnv>()
       throw error;
     }
 
+    await db
+      .insert(workers)
+      .values({
+        email,
+        firstName,
+        lastName,
+        phone: "",
+        providerVerificationSessionId: stripeCheckoutSession.id,
+        serviceRadiusMiles: 10,
+        servicesOffered: [],
+        userId: providerUser.id,
+      })
+      .onConflictDoUpdate({
+        set: {
+          providerVerificationSessionId: stripeCheckoutSession.id,
+          updatedAt: new Date(),
+        },
+        target: workers.userId,
+      });
+
     return c.json({ url: stripeCheckoutSession.url }, 200);
   })
   .post("/provider/resume", async (c) => {
@@ -2150,6 +2175,18 @@ export const checkoutRoutes = new Hono<AppEnv>()
     });
     if (worker?.providerVerificationPaidAt) {
       return c.json({ error: "Provider verification is already paid." }, 409);
+    }
+
+    if (worker?.providerVerificationSessionId) {
+      const stripe = getStripeClient();
+      const existingSession = stripe
+        ? await stripe.checkout.sessions
+            .retrieve(worker.providerVerificationSessionId)
+            .catch(() => null)
+        : null;
+      if (existingSession?.status === "open" && existingSession.url) {
+        return c.json({ url: existingSession.url }, 200);
+      }
     }
 
     const [firstName = "", ...rest] = (userResult.user.name ?? "")
@@ -2175,6 +2212,26 @@ export const checkoutRoutes = new Hono<AppEnv>()
       },
       successUrl,
     });
+
+    await db
+      .insert(workers)
+      .values({
+        email: userResult.user.email,
+        firstName,
+        lastName,
+        phone: "",
+        providerVerificationSessionId: stripeCheckoutSession.id,
+        serviceRadiusMiles: 10,
+        servicesOffered: [],
+        userId: userResult.user.id,
+      })
+      .onConflictDoUpdate({
+        set: {
+          providerVerificationSessionId: stripeCheckoutSession.id,
+          updatedAt: new Date(),
+        },
+        target: workers.userId,
+      });
 
     return c.json({ url: stripeCheckoutSession.url }, 200);
   })

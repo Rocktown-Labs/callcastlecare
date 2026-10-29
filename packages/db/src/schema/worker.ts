@@ -53,6 +53,7 @@ export const workers = pgTable(
     providerVerificationPaidAt: timestamp("provider_verification_paid_at", {
       withTimezone: true,
     }),
+    providerVerificationSessionId: text("provider_verification_session_id"),
     serviceRadiusMiles: integer("service_radius_miles").notNull().default(10),
     servicesOffered: text("services_offered").array().notNull().default([]),
     stripeAccountApiVersion: text("stripe_account_api_version"),

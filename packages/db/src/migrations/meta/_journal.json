@@ -162,6 +162,13 @@
       "when": 1793299296696,
       "tag": "0022_aspiring_the_anarchist",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793300084787,
+      "tag": "0023_polite_molten_man",
+      "breakpoints": true
     }
   ]
 }

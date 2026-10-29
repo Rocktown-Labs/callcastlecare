@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   createVerificationOTP: vi.fn(),
   customerFindFirst: vi.fn(),
   dbAddressFindFirst: vi.fn(),
+  dbInsert: vi.fn(),
   env: {
     ADMIN_EMAIL: "admin@callcastlecare.com",
     BETTER_AUTH_SECRET: "test-secret-for-checkout-claim-routes-1234",
@@ -35,7 +36,7 @@ vi.mock("@callcastlecare/db", () => ({
   and: vi.fn(),
   db: {
     execute: vi.fn(),
-    insert: vi.fn(),
+    insert: mocks.dbInsert,
     query: {
       addresses: { findFirst: mocks.dbAddressFindFirst },
       checkoutItems: { findMany: mocks.checkoutItemsFindMany },
@@ -512,6 +513,13 @@ describe("POST /checkout/provider", () => {
         id: "user_provider_1",
         name: "Jamie Provider",
       },
+    });
+    mocks.dbInsert.mockReturnValue({
+      values: () => ({
+        onConflictDoUpdate: () => ({
+          returning: () => [],
+        }),
+      }),
     });
   });
 
