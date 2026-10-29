@@ -48,6 +48,9 @@
     "db:studio": {
       "cache": false,
       "persistent": true
+    },
+    "reset-legacy-provider-passwords": {
+      "cache": false
     }
   }
 }

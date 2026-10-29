@@ -30,7 +30,16 @@ const buildEnv = (source: EnvSource) => {
       ADMIN_EMAIL: z.email().default("cg@rocktownlabs.com"),
       BETTER_AUTH_SECRET: z.string().min(32),
       BETTER_AUTH_URL: z.url(),
-      CORS_ORIGIN: z.url(),
+      CORS_ORIGIN: z
+        .string()
+        .min(1)
+        .refine(
+          (value) =>
+            value
+              .split(",")
+              .every((origin) => z.url().safeParse(origin.trim()).success),
+          "CORS_ORIGIN must be a URL or a comma-separated list of URLs"
+        ),
       DATABASE_URL: z.string().min(1),
       GOOGLE_CLIENT_ID: z.string().min(1).optional(),
       GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),

@@ -59,6 +59,7 @@ import { sendEmail } from "../lib/integrations/email";
 import { verifyAddressWithRadar } from "../lib/integrations/radar";
 import { lookupPropertyWithRentCast } from "../lib/integrations/rentcast";
 import {
+  getStripeClient,
   getStripeMode,
   isStripeMockMode,
 } from "../lib/integrations/stripe-client";
@@ -82,6 +83,7 @@ import {
   finalizeCheckoutPayment,
   formatAppointmentWindow,
 } from "../lib/orders";
+import { getPrimaryOrigin } from "../lib/origin";
 import { releasePendingWorkerPayouts } from "../lib/payouts";
 import {
   materializeSubscriptionPeriodOrders,
@@ -184,8 +186,9 @@ const getScheduledCheckoutSlots = (
 
 const getCheckoutOrigin = (c: HonoContext) => {
   const requestOrigin = new URL(c.req.url).origin;
-  if (env.CORS_ORIGIN && env.CORS_ORIGIN !== "*") {
-    return env.CORS_ORIGIN;
+  const configured = getPrimaryOrigin(env.CORS_ORIGIN);
+  if (configured && configured !== "*") {
+    return configured;
   }
   return requestOrigin;
 };
@@ -410,32 +413,28 @@ const finalizeFromMetadata = async (input: {
   return true;
 };
 
-const PROVIDER_TEMP_PASSWORD = "TempPassword123!";
-
 const getProviderPlanLabel = (plan: string) =>
   plan === "pro" ? "CastleCare Pro" : "Standard Provider";
 
-const getOrCreateProviderUser = async (input: {
+const getProviderUserByEmail = (email: string) =>
+  db.query.user.findFirst({
+    where: eq(authUsers.email, email.trim().toLowerCase()),
+  });
+
+const createProviderUser = async (input: {
   email: string;
   firstName: string;
   lastName: string;
-  password?: string;
+  password: string;
 }) => {
   const normalizedEmail = input.email.trim().toLowerCase();
-
-  const existingUser = await db.query.user.findFirst({
-    where: eq(authUsers.email, normalizedEmail),
-  });
-  if (existingUser) {
-    return existingUser;
-  }
 
   const signup = await auth.api.signUpEmail({
     body: {
       callbackURL: "/dashboard/provider",
       email: normalizedEmail,
       name: `${input.firstName} ${input.lastName}`.trim(),
-      password: input.password ?? PROVIDER_TEMP_PASSWORD,
+      password: input.password,
     },
   });
 
@@ -458,11 +457,16 @@ const handleProviderExpressOnboarding = async (input: {
 }) => {
   const normalizedEmail = input.email.trim().toLowerCase();
 
-  const user = await getOrCreateProviderUser({
-    email: normalizedEmail,
-    firstName: input.firstName,
-    lastName: input.lastName,
-  });
+  const user = await getProviderUserByEmail(normalizedEmail);
+  if (!user) {
+    logger.error(
+      {
+        email: normalizedEmail,
+      },
+      "provider:checkout_user_missing"
+    );
+    return;
+  }
 
   const rows = await db
     .insert(workers)
@@ -475,6 +479,8 @@ const handleProviderExpressOnboarding = async (input: {
       firstName: input.firstName,
       lastName: input.lastName,
       phone: "",
+      providerVerificationPaidAt: new Date(),
+      providerVerificationSessionId: null,
       serviceRadiusMiles: 10,
       servicesOffered: [],
       userId: user.id,
@@ -485,6 +491,8 @@ const handleProviderExpressOnboarding = async (input: {
           source: "express_onboarding_checkout",
           ...(input.plan ? { plan: input.plan } : {}),
         },
+        providerVerificationPaidAt: new Date(),
+        providerVerificationSessionId: null,
         updatedAt: new Date(),
       },
       target: workers.userId,
@@ -581,10 +589,6 @@ const handleCheckoutSessionCompleted = async (event: StripeWebhookEvent) => {
   const checkoutObject = event.data.object;
   const metadata = getObjectMetadata(checkoutObject);
 
-  if (await handleProviderCheckoutCompleted(metadata)) {
-    return;
-  }
-
   const stripeCheckoutSessionId = getStripeObjectId(checkoutObject.id);
   const stripePaymentIntentId = getStripeObjectId(
     checkoutObject.payment_intent
@@ -598,6 +602,12 @@ const handleCheckoutSessionCompleted = async (event: StripeWebhookEvent) => {
       { paymentStatus, stripeCheckoutSessionId },
       "stripe_webhook:checkout_not_paid"
     );
+    return;
+  }
+
+  // Provider verification is a one-time payment. Do not mark it paid from a
+  // completed-but-unpaid delayed-method session.
+  if (await handleProviderCheckoutCompleted(metadata)) {
     return;
   }
 
@@ -653,6 +663,45 @@ const handleCheckoutSessionCompleted = async (event: StripeWebhookEvent) => {
   });
 };
 
+const clearProviderVerificationSession = async (event: StripeWebhookEvent) => {
+  const metadata = getObjectMetadata(event.data.object);
+  if (metadata?.type !== "provider_express_onboarding") {
+    return;
+  }
+
+  const sessionId = getStringField(event.data.object.id);
+  const providerUserId = getStringField(metadata.providerUserId);
+  const email = getStringField(metadata.email);
+  if (!sessionId) {
+    return;
+  }
+
+  let target;
+  if (providerUserId) {
+    target = and(
+      eq(workers.userId, providerUserId),
+      eq(workers.providerVerificationSessionId, sessionId)
+    );
+  } else if (email) {
+    target = and(
+      eq(workers.email, email.toLowerCase()),
+      eq(workers.providerVerificationSessionId, sessionId)
+    );
+  }
+
+  if (!target) {
+    return;
+  }
+
+  await db
+    .update(workers)
+    .set({
+      providerVerificationSessionId: null,
+      updatedAt: new Date(),
+    })
+    .where(target);
+};
+
 const handleCheckoutSessionAsyncPaymentFailed = async (
   event: StripeWebhookEvent
 ) => {
@@ -660,6 +709,8 @@ const handleCheckoutSessionAsyncPaymentFailed = async (
   if (!stripeCheckoutSessionId) {
     return;
   }
+
+  await clearProviderVerificationSession(event);
 
   await db
     .update(checkoutSessions)
@@ -743,6 +794,8 @@ const handleCheckoutSessionExpired = async (event: StripeWebhookEvent) => {
   if (!stripeSessionId) {
     return;
   }
+
+  await clearProviderVerificationSession(event);
 
   await db
     .update(checkoutSessions)
@@ -1219,7 +1272,7 @@ const providerCheckoutSchema = z.object({
   email: z.string().email(),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
-  password: z.string().min(8).optional(),
+  password: z.string().min(8).max(128),
   plan: z.string().default("standard_provider"),
 });
 
@@ -1548,6 +1601,7 @@ const validateCheckoutPaymentOption = async (input: ParsedCheckoutConfirm) => {
   return { error: null, hasRecurringCheckout } as const;
 };
 
+// eslint-disable-next-line complexity -- Checkout confirmation keeps validation, pricing, and payment setup in one auditable flow.
 const handleCheckoutConfirm = async (c: HonoContext) => {
   const body = await c.req.json();
   const parsed = checkoutConfirmRequestSchema.safeParse(body);
@@ -1559,6 +1613,14 @@ const handleCheckoutConfirm = async (c: HonoContext) => {
   if (paymentValidation.error) {
     return c.json({ error: paymentValidation.error }, 409);
   }
+
+  // A saved address id is only meaningful to the signed-in owner. Guest
+  // checkout must provide the address text, otherwise knowing an email and a
+  // sequential address id would expose another customer's saved address.
+  if (parsed.data.addressId && !c.get("user")) {
+    return c.json({ error: "Sign in to book with a saved address." }, 401);
+  }
+
   const { hasRecurringCheckout } = paymentValidation;
   const customer = await getCheckoutCustomer(c, parsed.data);
   const addressResult = await resolveCheckoutAddress({
@@ -2045,31 +2107,224 @@ export const checkoutRoutes = new Hono<AppEnv>()
     }
 
     const { email, firstName, lastName, password, plan } = parsed.data;
-    const providerUser = await getOrCreateProviderUser({
-      email,
-      firstName,
-      lastName,
-      ...(password ? { password } : {}),
-    });
+    const existingUser = await getProviderUserByEmail(email);
+    let providerUser;
+    let createdProviderUser = false;
+
+    if (existingUser) {
+      // Never verify a password on an unauthenticated endpoint: that would be
+      // an online password oracle for any email. Existing accounts resume
+      // through the authenticated /checkout/provider/resume route.
+      return c.json(
+        {
+          error:
+            "An account with this email already exists. Sign in and continue from the provider dashboard.",
+        },
+        409
+      );
+    }
+
+    try {
+      providerUser = await createProviderUser({
+        email,
+        firstName,
+        lastName,
+        password,
+      });
+      createdProviderUser = true;
+    } catch (error) {
+      const racedUser = await getProviderUserByEmail(email);
+      if (racedUser) {
+        return c.json(
+          {
+            error:
+              "An account with this email already exists. Sign in to continue provider onboarding.",
+          },
+          409
+        );
+      }
+      throw error;
+    }
+
     const origin = getCheckoutOrigin(c);
     const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}&type=provider&plan=${encodeURIComponent(plan)}`;
     const cancelUrl = `${origin}/earn#apply?checkout=cancelled`;
+
+    let stripeCheckoutSession;
+    try {
+      stripeCheckoutSession = await createStripeCheckoutSession({
+        amountDueCents: 5000,
+        cancelUrl,
+        checkoutSessionId: Date.now(),
+        customerEmail: email,
+        metadata: {
+          email,
+          firstName,
+          lastName,
+          plan,
+          providerUserId: providerUser.id,
+          type: "provider_express_onboarding",
+        },
+        successUrl,
+      });
+    } catch (error) {
+      // Do not leave a brand-new account behind when Stripe cannot start the
+      // checkout. Pre-existing unverified accounts are intentionally kept so
+      // the applicant can retry.
+      if (createdProviderUser) {
+        await db.delete(authUsers).where(eq(authUsers.id, providerUser.id));
+      }
+      throw error;
+    }
+
+    await db
+      .insert(workers)
+      .values({
+        email,
+        firstName,
+        lastName,
+        phone: "",
+        providerVerificationSessionId: stripeCheckoutSession.id,
+        serviceRadiusMiles: 10,
+        servicesOffered: [],
+        userId: providerUser.id,
+      })
+      .onConflictDoUpdate({
+        set: {
+          providerVerificationSessionId: stripeCheckoutSession.id,
+          updatedAt: new Date(),
+        },
+        target: workers.userId,
+      });
+
+    return c.json({ url: stripeCheckoutSession.url }, 200);
+  })
+  .post("/provider/resume", async (c) => {
+    const userResult = requireUser(c);
+    if (userResult.error) {
+      return userResult.error;
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = z
+      .object({ plan: z.string().trim().min(1).max(64).optional() })
+      .safeParse(body);
+    const plan = parsed.success
+      ? (parsed.data.plan ?? "standard_provider")
+      : "standard_provider";
+
+    const worker = await db.query.workers.findFirst({
+      where: eq(workers.userId, userResult.user.id),
+    });
+    if (worker?.providerVerificationPaidAt) {
+      return c.json({ error: "Provider verification is already paid." }, 409);
+    }
+
+    if (worker?.providerVerificationSessionId) {
+      const stripe = getStripeClient();
+      if (!stripe) {
+        return c.json(
+          { error: "Provider verification is temporarily unavailable." },
+          503
+        );
+      }
+
+      let existingSession;
+      try {
+        existingSession = await stripe.checkout.sessions.retrieve(
+          worker.providerVerificationSessionId
+        );
+      } catch (error) {
+        const isMissingSession =
+          typeof error === "object" &&
+          error !== null &&
+          (("code" in error &&
+            (error as { code?: unknown }).code === "resource_missing") ||
+            ("statusCode" in error &&
+              (error as { statusCode?: unknown }).statusCode === 404));
+        if (!isMissingSession) {
+          logger.warn(
+            {
+              err: error,
+              sessionId: worker.providerVerificationSessionId,
+              userId: userResult.user.id,
+            },
+            "provider:verification_session_lookup_failed"
+          );
+          // Do not mint a second payable session when we cannot prove the
+          // first one is closed.
+          return c.json(
+            {
+              error: "Provider verification status is temporarily unavailable.",
+            },
+            503
+          );
+        }
+
+        // The stored session is gone (deleted or from another Stripe mode).
+        // Fall through and create a fresh one; the upsert below replaces the
+        // stale id.
+      }
+
+      if (existingSession?.status === "open" && existingSession.url) {
+        return c.json({ url: existingSession.url }, 200);
+      }
+      if (existingSession?.status === "complete") {
+        return c.json(
+          {
+            error:
+              existingSession.payment_status === "paid"
+                ? "Verification payment was received and is being finalized."
+                : "Verification payment is still processing. Try again after it settles.",
+          },
+          409
+        );
+      }
+    }
+
+    const [firstName = "", ...rest] = (userResult.user.name ?? "")
+      .trim()
+      .split(/\s+/u);
+    const lastName = rest.join(" ");
+    const origin = getCheckoutOrigin(c);
+    const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}&type=provider&plan=${encodeURIComponent(plan)}`;
+    const cancelUrl = `${origin}/dashboard/provider?checkout=cancelled`;
 
     const stripeCheckoutSession = await createStripeCheckoutSession({
       amountDueCents: 5000,
       cancelUrl,
       checkoutSessionId: Date.now(),
-      customerEmail: email,
+      customerEmail: userResult.user.email,
       metadata: {
-        email,
+        email: userResult.user.email,
         firstName,
         lastName,
         plan,
-        providerUserId: providerUser.id,
+        providerUserId: userResult.user.id,
         type: "provider_express_onboarding",
       },
       successUrl,
     });
+
+    await db
+      .insert(workers)
+      .values({
+        email: userResult.user.email,
+        firstName,
+        lastName,
+        phone: "",
+        providerVerificationSessionId: stripeCheckoutSession.id,
+        serviceRadiusMiles: 10,
+        servicesOffered: [],
+        userId: userResult.user.id,
+      })
+      .onConflictDoUpdate({
+        set: {
+          providerVerificationSessionId: stripeCheckoutSession.id,
+          updatedAt: new Date(),
+        },
+        target: workers.userId,
+      });
 
     return c.json({ url: stripeCheckoutSession.url }, 200);
   })

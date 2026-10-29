@@ -26,6 +26,37 @@ const parseName = (name: string | null | undefined) => {
   };
 };
 
+/**
+ * Session tokens stay in the HttpOnly cookie. API responses expose only the
+ * fields the client needs, so a cross-origin read or an XSS cannot lift the
+ * bearer-equivalent token out of a JSON body.
+ */
+export const toPublicSession = (session: {
+  expiresAt?: Date | string;
+  id?: string;
+  impersonatedBy?: string | null;
+  userId?: string;
+}) => ({
+  expiresAt: session.expiresAt ?? null,
+  id: session.id ?? null,
+  impersonatedBy: session.impersonatedBy ?? null,
+  userId: session.userId ?? null,
+});
+
+export const toPublicUser = (user: {
+  email: string;
+  id: string;
+  image?: string | null;
+  name?: string | null;
+  role?: string | null;
+}) => ({
+  email: user.email,
+  id: user.id,
+  image: user.image ?? null,
+  name: user.name ?? null,
+  role: user.role ?? "user",
+});
+
 export const requireUser = (c: Context) => {
   const currentUser = c.get("user");
   if (!currentUser) {

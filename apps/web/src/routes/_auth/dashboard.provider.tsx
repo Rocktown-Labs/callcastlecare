@@ -89,9 +89,19 @@ interface ConnectStatus {
   accountId: string | null;
   onboardingStatus: string;
   payoutsEnabled: boolean;
+  providerVerificationPaidAt?: string | null;
   status: string;
   transferCapabilityStatus?: string | null;
 }
+
+const getSetupFeeLabel = (status: ConnectStatus | null) => {
+  if (!status) {
+    return "Checking...";
+  }
+  return status.providerVerificationPaidAt === null
+    ? "Payment due"
+    : "Authorized";
+};
 
 const getConnectStatusLabel = (status: string | undefined) => {
   if (status === "ready") {
@@ -108,6 +118,7 @@ const useProviderConnect = () => {
     null
   );
   const [isConnectingStripe, setIsConnectingStripe] = useState(false);
+  const [isVerifyingProvider, setIsVerifyingProvider] = useState(false);
 
   useEffect(() => {
     const loadConnectStatus = async () => {
@@ -159,7 +170,45 @@ const useProviderConnect = () => {
     }
   };
 
-  return { connectStatus, isConnectingStripe, startConnectOnboarding };
+  const startProviderVerification = async () => {
+    setIsVerifyingProvider(true);
+    try {
+      const response = await fetch(
+        new URL("/api/v1/checkout/provider/resume", getServerUrl()),
+        {
+          body: JSON.stringify({ plan: "standard_provider" }),
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        }
+      );
+      const payload = (await response.json()) as {
+        error?: string;
+        url?: string;
+      };
+      if (!(response.ok && payload.url)) {
+        throw new Error(
+          payload.error ?? "Provider verification is unavailable."
+        );
+      }
+      window.location.href = payload.url;
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Provider verification is unavailable."
+      );
+      setIsVerifyingProvider(false);
+    }
+  };
+
+  return {
+    connectStatus,
+    isConnectingStripe,
+    isVerifyingProvider,
+    startConnectOnboarding,
+    startProviderVerification,
+  };
 };
 
 const useProviderEquipmentUpload = () => {
@@ -335,7 +384,7 @@ const ProviderStatusTracker = ({
         </p>
         <p className="mt-1 flex items-center gap-1 font-black text-emerald-900">
           <CheckCircle2 className="size-4 text-emerald-600" />
-          Authorized
+          {getSetupFeeLabel(connectStatus)}
         </p>
       </div>
 
@@ -365,8 +414,10 @@ const ProviderConnectBanner = (props: {
   connectStatus: ConnectStatus | null;
   isConnectingStripe: boolean;
   isUploadingEquipment: boolean;
+  isVerifyingProvider: boolean;
   onConnect: () => void;
   onEquipmentPhoto: (file: File) => void;
+  onVerifyProvider: () => void;
 }) => (
   <section className="rounded-3xl border border-lime-300/60 bg-lime-100/50 p-6 shadow-sm">
     <div className="flex flex-wrap items-center justify-between gap-4">
@@ -385,6 +436,19 @@ const ProviderConnectBanner = (props: {
         </p>
       </div>
       <div className="flex flex-wrap gap-3">
+        {props.connectStatus?.providerVerificationPaidAt === null ? (
+          <button
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-slate-950 px-5 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+            disabled={props.isVerifyingProvider}
+            onClick={props.onVerifyProvider}
+            type="button"
+          >
+            <ShieldCheck className="size-4" />
+            {props.isVerifyingProvider
+              ? "Opening Stripe..."
+              : "Complete $50 verification"}
+          </button>
+        ) : null}
         {props.connectStatus?.onboardingStatus === "approved" &&
         props.connectStatus.status !== "ready" ? (
           <button
@@ -470,8 +534,13 @@ const ProviderStatusRoute = () => {
   const { session } = useRouteContext({ from: "/_auth/dashboard" });
   const { plan } = useSearch({ from: "/_auth/dashboard/provider" });
   const application = useMemo(() => getStoredApplication(), []);
-  const { connectStatus, isConnectingStripe, startConnectOnboarding } =
-    useProviderConnect();
+  const {
+    connectStatus,
+    isConnectingStripe,
+    isVerifyingProvider,
+    startConnectOnboarding,
+    startProviderVerification,
+  } = useProviderConnect();
   const { isUploadingEquipment, uploadEquipmentPhoto } =
     useProviderEquipmentUpload();
   const [isProfileSaved, setIsProfileSaved] = useState(false);
@@ -580,8 +649,10 @@ const ProviderStatusRoute = () => {
             connectStatus={connectStatus}
             isConnectingStripe={isConnectingStripe}
             isUploadingEquipment={isUploadingEquipment}
+            isVerifyingProvider={isVerifyingProvider}
             onConnect={() => void startConnectOnboarding()}
             onEquipmentPhoto={(file) => void uploadEquipmentPhoto(file)}
+            onVerifyProvider={() => void startProviderVerification()}
           />
           <ProviderEquipmentGuide />
         </div>

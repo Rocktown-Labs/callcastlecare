@@ -1,10 +1,9 @@
 import { and, db, desc, eq } from "@callcastlecare/db";
 import { orderDisputes, orders } from "@callcastlecare/db/schema/index";
-import { env } from "@callcastlecare/env/server";
-import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
 
+import { requireAdmin } from "../lib/admin";
 import { getOrCreateCustomerForUser, requireUser } from "../lib/auth";
 import { logger } from "../lib/logger";
 import type { AppEnv } from "../types";
@@ -25,22 +24,6 @@ const resolveDisputeSchema = z.object({
     "dismissed",
   ]),
 });
-
-const requireAdmin = (c: Context<AppEnv>) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  const isAdmin =
-    user.role === "admin" ||
-    user.email.toLowerCase() === env.ADMIN_EMAIL.toLowerCase();
-  if (!isAdmin) {
-    return c.json({ error: "forbidden" }, 403);
-  }
-
-  return null;
-};
 
 export const disputeRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {

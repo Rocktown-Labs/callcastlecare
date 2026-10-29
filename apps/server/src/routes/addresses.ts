@@ -4,6 +4,7 @@ import { addresses } from "@callcastlecare/db/schema/index";
 import { Hono } from "hono";
 
 import { getOrCreateCustomerForUser, requireUser } from "../lib/auth";
+import { verifyAddressWithRadar } from "../lib/integrations/radar";
 import { createAddressRecord } from "../lib/orders";
 import type { AppEnv } from "../types";
 import {
@@ -80,30 +81,34 @@ export const addressesRoutes = new Hono<AppEnv>()
 
     if (payload.street && payload.city && payload.state && payload.zip) {
       const country = payload.country ?? "US";
+      const formattedAddress =
+        payload.formattedAddress ??
+        buildFormattedAddress({
+          city: payload.city,
+          country,
+          state: payload.state,
+          street: payload.street,
+          zip: payload.zip,
+        });
+      const verified = await verifyAddressWithRadar(formattedAddress);
       const address = await createAddressRecord({
-        city: payload.city,
+        city: verified.city || payload.city,
         country,
         customerId: customer.id,
-        formattedAddress:
-          payload.formattedAddress ??
-          buildFormattedAddress({
-            city: payload.city,
-            country,
-            state: payload.state,
-            street: payload.street,
-            zip: payload.zip,
-          }),
+        formattedAddress: verified.verdict.isComplete
+          ? verified.formattedAddress
+          : formattedAddress,
         instructions: payload.instructions ?? null,
         isDefault: payload.isDefault,
         label: payload.label,
-        latitude: payload.latitude ?? null,
-        longitude: payload.longitude ?? null,
-        radarGeocodeJson: {
-          source: "client-validated",
-        },
-        state: payload.state,
-        street: payload.street,
-        zip: payload.zip,
+        latitude: verified.latitude,
+        longitude: verified.longitude,
+        radarGeocodeJson: verified.raw,
+        // Service-area eligibility and travel pricing read state/zip, so use
+        // the geocoder's canonical values rather than client-provided ones.
+        state: verified.state || payload.state,
+        street: verified.street || payload.street,
+        zip: verified.zip || payload.zip,
       });
 
       return c.json({ address }, 200);
@@ -115,22 +120,24 @@ export const addressesRoutes = new Hono<AppEnv>()
       const state = payload.state ?? parts[2]?.split(" ")[0] ?? "AR";
       const street = payload.street ?? parts[0] ?? payload.address;
       const zip = payload.zip ?? parts[2]?.split(" ")[1] ?? "72201";
+      const formattedAddress = payload.formattedAddress ?? payload.address;
+      const verified = await verifyAddressWithRadar(formattedAddress);
       const address = await createAddressRecord({
-        city,
+        city: verified.city || city,
         country: payload.country ?? "US",
         customerId: customer.id,
-        formattedAddress: payload.formattedAddress ?? payload.address,
+        formattedAddress: verified.verdict.isComplete
+          ? verified.formattedAddress
+          : formattedAddress,
         instructions: payload.instructions ?? null,
         isDefault: payload.isDefault,
         label: payload.label,
-        latitude: payload.latitude ?? null,
-        longitude: payload.longitude ?? null,
-        radarGeocodeJson: {
-          source: "manual-entry",
-        },
-        state,
-        street,
-        zip,
+        latitude: verified.latitude,
+        longitude: verified.longitude,
+        radarGeocodeJson: verified.raw,
+        state: verified.state || state,
+        street: verified.street || street,
+        zip: verified.zip || zip,
       });
 
       return c.json({ address }, 200);

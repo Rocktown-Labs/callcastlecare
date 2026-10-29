@@ -110,6 +110,7 @@ When redeploying, make sure these are exported or present in the environment:
 
 - `BETTER_AUTH_SECRET`
 - `DATABASE_URL`
+- `RADAR_API_KEY` (required for server-side address verification)
 - `RESEND_API_KEY`
 - `RESEND_WEBHOOK_SECRET`
 - `STRIPE_SECRET_KEY`

@@ -1,0 +1,1 @@
+ALTER TABLE "workers" ADD COLUMN "provider_verification_session_id" text;

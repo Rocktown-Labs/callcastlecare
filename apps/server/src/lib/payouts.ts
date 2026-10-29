@@ -1,4 +1,4 @@
-import { and, db, eq, isNull, lte } from "@callcastlecare/db";
+import { and, db, eq, isNull, lt, lte } from "@callcastlecare/db";
 import {
   earningsLedger,
   payouts,
@@ -10,6 +10,10 @@ import { env } from "@callcastlecare/env/server";
 import { releaseWorkerPayout } from "./integrations/stripe-connect";
 import { logger } from "./logger";
 
+const STALE_PAYOUT_CLAIM_MS = 15 * 60 * 1000;
+
+type InsertExecutor = Pick<typeof db, "insert">;
+
 const createWorkerEarnings = async (
   input: {
     dispatchBonusCents?: number;
@@ -17,9 +21,10 @@ const createWorkerEarnings = async (
     tipAmountCents: number;
     workerId: number;
   },
-  basePayCents: number
+  basePayCents: number,
+  executor: InsertExecutor = db
 ) => {
-  await db.insert(earningsLedger).values({
+  await executor.insert(earningsLedger).values({
     amountCents: basePayCents,
     earningType: "base_pay",
     orderId: input.orderId,
@@ -29,7 +34,7 @@ const createWorkerEarnings = async (
 
   const dispatchBonusCents = Math.max(0, input.dispatchBonusCents ?? 0);
   if (dispatchBonusCents > 0) {
-    await db.insert(earningsLedger).values({
+    await executor.insert(earningsLedger).values({
       amountCents: dispatchBonusCents,
       earningType: "adjustment",
       orderId: input.orderId,
@@ -39,7 +44,7 @@ const createWorkerEarnings = async (
   }
 
   if (input.tipAmountCents > 0) {
-    await db.insert(earningsLedger).values({
+    await executor.insert(earningsLedger).values({
       amountCents: input.tipAmountCents,
       earningType: "tip",
       orderId: input.orderId,
@@ -49,18 +54,14 @@ const createWorkerEarnings = async (
   }
 };
 
-const createPayoutRecord = async (input: {
-  amountCents: number;
-  orderId: number;
-  workerId: number;
-}) => {
+const settlePayoutRecord = async (claimed: typeof payouts.$inferSelect) => {
   const worker = await db.query.workers.findFirst({
     columns: {
       stripeAccountId: true,
       stripeAccountStatus: true,
       stripePayoutsEnabled: true,
     },
-    where: eq(workers.id, input.workerId),
+    where: eq(workers.id, claimed.workerId),
   });
 
   const isReady = Boolean(
@@ -69,29 +70,35 @@ const createPayoutRecord = async (input: {
     worker.stripePayoutsEnabled
   );
   if (!isReady || !worker?.stripeAccountId) {
-    await db.insert(payouts).values({
-      amountCents: input.amountCents,
-      orderId: input.orderId,
-      status: "pending",
-      workerId: input.workerId,
-    });
-    return;
+    const [pending] = await db
+      .update(payouts)
+      .set({ claimedAt: null, status: "pending" })
+      .where(and(eq(payouts.id, claimed.id), eq(payouts.status, "processing")))
+      .returning();
+    return pending ?? claimed;
   }
 
   const transfer = await releaseWorkerPayout({
-    amountCents: input.amountCents,
-    orderId: input.orderId,
+    amountCents: claimed.amountCents,
+    orderId: claimed.orderId ?? 0,
     workerStripeAccountId: worker.stripeAccountId,
   });
 
-  await db.insert(payouts).values({
-    amountCents: input.amountCents,
-    orderId: input.orderId,
-    paidAt: transfer.success ? new Date() : null,
-    providerPayoutId: transfer.providerPayoutId,
-    status: transfer.success ? "paid" : "failed",
-    workerId: input.workerId,
-  });
+  const [settled] = await db
+    .update(payouts)
+    .set({
+      claimedAt: null,
+      failureReason: transfer.success ? null : "stripe_transfer_failed",
+      paidAt: transfer.success ? new Date() : null,
+      providerPayoutId: transfer.providerPayoutId,
+      // Transient Stripe/network failures stay pending so the next release
+      // attempt can retry them; Stripe idempotency keeps the retry safe.
+      status: transfer.success ? "paid" : "pending",
+    })
+    .where(and(eq(payouts.id, claimed.id), eq(payouts.status, "processing")))
+    .returning();
+
+  return settled ?? claimed;
 };
 
 export const createCompletionPayoutRecords = async (input: {
@@ -101,13 +108,6 @@ export const createCompletionPayoutRecords = async (input: {
   totalBasePriceCents: number;
   workerId: number;
 }) => {
-  const existingPayout = await db.query.payouts.findFirst({
-    where: eq(payouts.orderId, input.orderId),
-  });
-  if (existingPayout) {
-    return existingPayout;
-  }
-
   const basePayCents = Math.max(
     0,
     Math.round((input.totalBasePriceCents * env.PROVIDER_PAYOUT_BPS) / 10_000)
@@ -116,16 +116,36 @@ export const createCompletionPayoutRecords = async (input: {
   const payoutAmountCents =
     basePayCents + dispatchBonusCents + Math.max(0, input.tipAmountCents);
 
-  await createWorkerEarnings(input, basePayCents);
-  await createPayoutRecord({
-    amountCents: payoutAmountCents,
-    orderId: input.orderId,
-    workerId: input.workerId,
+  const claimed = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(payouts)
+      .values({
+        amountCents: payoutAmountCents,
+        claimedAt: new Date(),
+        orderId: input.orderId,
+        status: "processing",
+        workerId: input.workerId,
+      })
+      .onConflictDoNothing({ target: payouts.orderId })
+      .returning();
+
+    if (!row) {
+      return null;
+    }
+
+    // The claim and its earnings ledger rows commit together, so a crash
+    // cannot leave a processing payout without matching earnings.
+    await createWorkerEarnings(input, basePayCents, tx);
+    return row;
   });
 
-  return db.query.payouts.findFirst({
-    where: eq(payouts.orderId, input.orderId),
-  });
+  if (!claimed) {
+    return db.query.payouts.findFirst({
+      where: eq(payouts.orderId, input.orderId),
+    });
+  }
+
+  return settlePayoutRecord(claimed);
 };
 
 export const releasePendingWorkerPayouts = async (workerId: number) => {
@@ -147,6 +167,22 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
     return [] as number[];
   }
 
+  // A crashed process can leave a claim in processing. Return stale claims to
+  // pending; Stripe's per-order idempotency key keeps a retry safe.
+  await db
+    .update(payouts)
+    .set({
+      failureReason: "stale_processing_claim",
+      status: "pending",
+    })
+    .where(
+      and(
+        eq(payouts.workerId, workerId),
+        eq(payouts.status, "processing"),
+        lt(payouts.claimedAt, new Date(Date.now() - STALE_PAYOUT_CLAIM_MS))
+      )
+    );
+
   const pendingPayouts = await db.query.payouts.findMany({
     where: and(eq(payouts.workerId, workerId), eq(payouts.status, "pending")),
   });
@@ -156,23 +192,37 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
       if (!payout.orderId) {
         return null;
       }
-      const transfer = await releaseWorkerPayout({
-        amountCents: payout.amountCents,
-        orderId: payout.orderId,
-        workerStripeAccountId,
-      });
-      if (!transfer.success) {
+
+      const [claimed] = await db
+        .update(payouts)
+        .set({ claimedAt: new Date(), status: "processing" })
+        .where(and(eq(payouts.id, payout.id), eq(payouts.status, "pending")))
+        .returning();
+      if (!claimed) {
         return null;
       }
-      await db
+
+      const transfer = await releaseWorkerPayout({
+        amountCents: claimed.amountCents,
+        orderId: claimed.orderId ?? 0,
+        workerStripeAccountId,
+      });
+
+      const [settled] = await db
         .update(payouts)
         .set({
-          paidAt: new Date(),
+          claimedAt: null,
+          failureReason: transfer.success ? null : "stripe_transfer_failed",
+          paidAt: transfer.success ? new Date() : null,
           providerPayoutId: transfer.providerPayoutId,
-          status: "paid",
+          status: transfer.success ? "paid" : "pending",
         })
-        .where(and(eq(payouts.id, payout.id), eq(payouts.status, "pending")));
-      return payout.id;
+        .where(
+          and(eq(payouts.id, claimed.id), eq(payouts.status, "processing"))
+        )
+        .returning();
+
+      return settled?.status === "paid" ? settled.id : null;
     })
   );
   const settledPayoutIds = settlementResults.filter(
@@ -203,26 +253,38 @@ export const releaseEligibleTipHolds = async (orderId?: number) => {
 
   await Promise.all(
     holds.map(async (hold) => {
-      await db.insert(earningsLedger).values({
-        amountCents: hold.amountCents,
-        earningType: "tip",
-        orderId: hold.orderId,
-        releaseAt: new Date(),
-        workerId: hold.workerId,
+      const released = await db.transaction(async (tx) => {
+        const [claimed] = await tx
+          .update(tipHolds)
+          .set({
+            releasedAt: new Date(),
+          })
+          .where(and(eq(tipHolds.id, hold.id), isNull(tipHolds.releasedAt)))
+          .returning();
+        if (!claimed) {
+          return null;
+        }
+
+        await tx.insert(earningsLedger).values({
+          amountCents: claimed.amountCents,
+          earningType: "tip",
+          orderId: claimed.orderId,
+          releaseAt: new Date(),
+          workerId: claimed.workerId,
+        });
+
+        return claimed;
       });
 
-      await db
-        .update(tipHolds)
-        .set({
-          releasedAt: new Date(),
-        })
-        .where(eq(tipHolds.id, hold.id));
+      if (!released) {
+        return;
+      }
 
       logger.info(
         {
-          amountCents: hold.amountCents,
-          holdId: hold.id,
-          orderId: hold.orderId,
+          amountCents: released.amountCents,
+          holdId: released.id,
+          orderId: released.orderId,
         },
         "tip_hold:released"
       );

@@ -12,6 +12,7 @@ import { env } from "@callcastlecare/env/server";
 import { Hono } from "hono";
 import type { Context } from "hono";
 
+import { isAdminUser } from "../lib/admin";
 import { requireUser, requireWorkerForUser } from "../lib/auth";
 import {
   createMediaStoragePath,
@@ -68,49 +69,197 @@ const getMediaBucket = (c: Context<AppEnv>): R2Bucket | null => {
 const isProviderEquipmentMedia = (mediaType: string) =>
   mediaType === "provider_equipment";
 
-const validateAttachmentTarget = async (input: {
-  isProviderEquipment: boolean;
-  legId?: number;
-  orderId?: number;
-  worker: Awaited<ReturnType<typeof requireWorkerForUser>>;
+const mediaPathPattern =
+  /^callcastlecare-media\/order-(?<order>\d+|none)\/leg-(?<leg>\d+|none)\/(?<mediaType>[a-z0-9_]+)\/[A-Za-z0-9._-]+$/u;
+
+interface MediaPathTarget {
+  legId: number | null;
+  mediaType: string;
+  orderId: number | null;
+}
+
+const parseMediaStoragePath = (storagePath: string): MediaPathTarget | null => {
+  const match = mediaPathPattern.exec(storagePath);
+  if (!match) {
+    return null;
+  }
+
+  const {
+    leg: legSegment,
+    mediaType,
+    order: orderSegment,
+  } = match.groups ?? {};
+  if (!(orderSegment && legSegment && mediaType)) {
+    return null;
+  }
+
+  const orderId = orderSegment === "none" ? null : Number(orderSegment);
+  const legId = legSegment === "none" ? null : Number(legSegment);
+  if (
+    (orderId !== null && (!Number.isInteger(orderId) || orderId <= 0)) ||
+    (legId !== null && (!Number.isInteger(legId) || legId <= 0))
+  ) {
+    return null;
+  }
+
+  return { legId, mediaType, orderId };
+};
+
+const canAccessOrder = async (input: {
+  customerId: number | null;
+  orderId: number;
+  user: NonNullable<ReturnType<typeof requireUser>["user"]>;
+  workerId: number | null;
 }) => {
-  if (input.isProviderEquipment) {
-    return input.worker
-      ? null
-      : { error: "worker_profile_required", status: 403 as const };
+  const order = await db.query.orders.findFirst({
+    where: eq(orders.id, input.orderId),
+  });
+  if (!order) {
+    return { allowed: false, found: false } as const;
   }
-  if (!input.orderId && !input.legId) {
-    return {
-      error: "Either orderId or legId is required",
-      status: 400 as const,
-    };
+
+  const allowed =
+    isAdminUser(input.user) ||
+    (input.customerId !== null && order.customerId === input.customerId) ||
+    (input.workerId !== null && order.assignedWorkerId === input.workerId);
+
+  return { allowed, found: true } as const;
+};
+
+const canAccessLeg = async (input: {
+  customerId: number | null;
+  legId: number;
+  user: NonNullable<ReturnType<typeof requireUser>["user"]>;
+  workerId: number | null;
+}) => {
+  const leg = await db.query.serviceLegs.findFirst({
+    where: eq(serviceLegs.id, input.legId),
+  });
+  if (!leg) {
+    return { allowed: false, found: false } as const;
   }
-  if (input.orderId) {
-    const order = await db.query.orders.findFirst({
-      where: eq(orders.id, input.orderId),
+
+  if (input.workerId !== null && leg.workerId === input.workerId) {
+    return { allowed: true, found: true } as const;
+  }
+
+  return canAccessOrder({
+    customerId: input.customerId,
+    orderId: leg.orderId,
+    user: input.user,
+    workerId: input.workerId,
+  });
+};
+
+const validateMediaPathMatch = (
+  input: {
+    legId?: number;
+    mediaType: string;
+    orderId?: number;
+  },
+  target: MediaPathTarget
+) => {
+  if (target.mediaType !== input.mediaType) {
+    return { error: "media_type_mismatch", status: 400 as const };
+  }
+
+  if (
+    (input.orderId !== undefined && target.orderId !== input.orderId) ||
+    (input.legId !== undefined && target.legId !== input.legId)
+  ) {
+    return { error: "storage_path_target_mismatch", status: 400 as const };
+  }
+
+  return null;
+};
+
+const authorizeTargetAccess = async (input: {
+  customerId: number | null;
+  target: MediaPathTarget;
+  user: NonNullable<ReturnType<typeof requireUser>["user"]>;
+  worker: Awaited<ReturnType<typeof requireWorkerForUser>>;
+  workerId: number | null;
+}) => {
+  if (input.target.orderId !== null) {
+    const access = await canAccessOrder({
+      customerId: input.customerId,
+      orderId: input.target.orderId,
+      user: input.user,
+      workerId: input.workerId,
     });
-    if (!order) {
+    if (!access.found) {
       return { error: "Order not found", status: 404 as const };
     }
-  }
-  if (input.legId) {
-    const leg = await db.query.serviceLegs.findFirst({
-      where: eq(serviceLegs.id, input.legId),
-    });
-    if (!leg) {
-      return { error: "Leg not found", status: 404 as const };
+    if (!access.allowed) {
+      return { error: "forbidden", status: 403 as const };
     }
   }
+
+  if (input.target.legId !== null) {
+    const access = await canAccessLeg({
+      customerId: input.customerId,
+      legId: input.target.legId,
+      user: input.user,
+      workerId: input.workerId,
+    });
+    if (!access.found) {
+      return { error: "Leg not found", status: 404 as const };
+    }
+    if (!access.allowed) {
+      return { error: "forbidden", status: 403 as const };
+    }
+  }
+
+  if (
+    input.target.orderId === null &&
+    input.target.legId === null &&
+    (input.target.mediaType !== "provider_equipment" || !input.worker)
+  ) {
+    return { error: "worker_profile_required", status: 403 as const };
+  }
+
   return null;
+};
+
+const authorizeMediaPath = async (input: {
+  legId?: number;
+  mediaType: string;
+  orderId?: number;
+  storagePath: string;
+  user: NonNullable<ReturnType<typeof requireUser>["user"]>;
+}) => {
+  const target = parseMediaStoragePath(input.storagePath);
+  if (!target) {
+    return { error: "invalid_storage_path", status: 400 as const };
+  }
+
+  const matchError = validateMediaPathMatch(input, target);
+  if (matchError) {
+    return matchError;
+  }
+
+  const [customer, worker] = await Promise.all([
+    db.query.customers.findFirst({
+      columns: { id: true },
+      where: eq(customers.userId, input.user.id),
+    }),
+    requireWorkerForUser(input.user),
+  ]);
+
+  return authorizeTargetAccess({
+    customerId: customer?.id ?? null,
+    target,
+    user: input.user,
+    worker,
+    workerId: worker?.id ?? null,
+  });
 };
 
 const canReadPrivateMedia = async (input: {
   pathname: string;
   user: NonNullable<ReturnType<typeof requireUser>["user"]>;
 }) => {
-  const isAdmin =
-    input.user.role === "admin" ||
-    input.user.email.toLowerCase() === env.ADMIN_EMAIL.toLowerCase();
+  const isAdmin = isAdminUser(input.user);
 
   const asset = await db.query.mediaAssets.findFirst({
     where: eq(mediaAssets.storagePath, input.pathname),
@@ -254,6 +403,11 @@ export const mediaRoutes = new Hono<AppEnv>()
     );
   })
   .post("/client-upload", async (c) => {
+    const userResult = requireUser(c);
+    if (userResult.error) {
+      return userResult.error;
+    }
+
     const bucket = getMediaBucket(c);
     if (!bucket) {
       return c.json({ error: "media_not_configured" }, 503);
@@ -269,6 +423,23 @@ export const mediaRoutes = new Hono<AppEnv>()
     if (!storagePath.startsWith(mediaValidation.pathnamePrefix)) {
       logger.warn({ storagePath }, "media:invalid_pathname");
       return c.json({ error: "invalid_storage_path" }, 400);
+    }
+
+    const parsedTarget = parseMediaStoragePath(storagePath);
+    if (!parsedTarget) {
+      return c.json({ error: "invalid_storage_path" }, 400);
+    }
+
+    const authorizationError = await authorizeMediaPath({
+      mediaType: parsedTarget.mediaType,
+      storagePath,
+      user: userResult.user,
+    });
+    if (authorizationError) {
+      return c.json(
+        { error: authorizationError.error },
+        authorizationError.status
+      );
     }
 
     const { file } = body;
@@ -306,14 +477,22 @@ export const mediaRoutes = new Hono<AppEnv>()
     }
 
     const worker = await requireWorkerForUser(userResult.user);
-    const attachmentError = await validateAttachmentTarget({
-      isProviderEquipment: isProviderEquipmentMedia(parsed.data.mediaType),
+    if (isProviderEquipmentMedia(parsed.data.mediaType) && !worker) {
+      return c.json({ error: "worker_profile_required" }, 403);
+    }
+
+    const authorizationError = await authorizeMediaPath({
       legId: parsed.data.legId,
+      mediaType: parsed.data.mediaType,
       orderId: parsed.data.orderId,
-      worker,
+      storagePath: parsed.data.storagePath,
+      user: userResult.user,
     });
-    if (attachmentError) {
-      return c.json({ error: attachmentError.error }, attachmentError.status);
+    if (authorizationError) {
+      return c.json(
+        { error: authorizationError.error },
+        authorizationError.status
+      );
     }
 
     const insertedAssets = await db

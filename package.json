@@ -37,6 +37,7 @@
     "db:generate": "turbo run db:generate -F @callcastlecare/db",
     "db:migrate": "turbo run db:migrate -F @callcastlecare/db",
     "db:reset": "turbo run db:reset -F @callcastlecare/db",
+    "db:reset-legacy-provider-passwords": "turbo run reset-legacy-provider-passwords -F server",
     "infra:plan": "turbo run plan -F @callcastlecare/infra",
     "infra:deploy": "turbo run deploy -F @callcastlecare/infra",
     "infra:destroy": "turbo run destroy -F @callcastlecare/infra",

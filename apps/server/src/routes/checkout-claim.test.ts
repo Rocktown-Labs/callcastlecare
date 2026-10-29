@@ -9,14 +9,17 @@ import { checkoutRoutes } from "./checkout";
 const mocks = vi.hoisted(() => ({
   checkoutItemsFindMany: vi.fn(),
   checkoutSessionFindFirst: vi.fn(),
+  createStripeCheckoutSession: vi.fn(),
   createVerificationOTP: vi.fn(),
   customerFindFirst: vi.fn(),
   dbAddressFindFirst: vi.fn(),
+  dbInsert: vi.fn(),
   env: {
     ADMIN_EMAIL: "admin@callcastlecare.com",
     BETTER_AUTH_SECRET: "test-secret-for-checkout-claim-routes-1234",
     RESEND_API_KEY: undefined as string | undefined,
   },
+  getStripeClient: vi.fn(),
   logger: {
     error: vi.fn(),
     info: vi.fn(),
@@ -25,14 +28,16 @@ const mocks = vi.hoisted(() => ({
   ordersFindMany: vi.fn(),
   retrieveStripeSession: vi.fn(),
   sendAuthOtpEmail: vi.fn(),
+  signUpEmail: vi.fn(),
   userFindFirst: vi.fn(),
+  workersFindFirst: vi.fn(),
 }));
 
 vi.mock("@callcastlecare/db", () => ({
   and: vi.fn(),
   db: {
     execute: vi.fn(),
-    insert: vi.fn(),
+    insert: mocks.dbInsert,
     query: {
       addresses: { findFirst: mocks.dbAddressFindFirst },
       checkoutItems: { findMany: mocks.checkoutItemsFindMany },
@@ -40,6 +45,7 @@ vi.mock("@callcastlecare/db", () => ({
       customers: { findFirst: mocks.customerFindFirst },
       orders: { findMany: mocks.ordersFindMany },
       user: { findFirst: mocks.userFindFirst },
+      workers: { findFirst: mocks.workersFindFirst },
     },
     transaction: vi.fn(),
     update: vi.fn(),
@@ -67,14 +73,14 @@ vi.mock("@callcastlecare/db/schema/index", () => ({
   stripeRefunds: { stripeRefundId: "stripeRefundId" },
   stripeWebhookEvents: { id: "id" },
   user: { email: "email" },
-  workers: { id: "id" },
+  workers: { id: "id", userId: "userId" },
 }));
 
 vi.mock("@callcastlecare/auth", () => ({
   auth: {
     api: {
       createVerificationOTP: mocks.createVerificationOTP,
-      signUpEmail: vi.fn(),
+      signUpEmail: mocks.signUpEmail,
     },
   },
 }));
@@ -98,7 +104,15 @@ vi.mock("@callcastlecare/env/server", () => ({
 vi.mock("../lib/auth", () => ({
   getOrCreateCustomerForCheckoutContact: vi.fn(),
   getOrCreateCustomerForUser: vi.fn(),
-  requireUser: vi.fn(),
+  requireUser: (c: {
+    get: (key: string) => unknown;
+    json: (body: unknown, status: 401) => Response;
+  }) => {
+    const user = c.get("user");
+    return user
+      ? { error: null, user }
+      : { error: c.json({ error: "unauthorized" }, 401), user: null };
+  },
 }));
 
 vi.mock("../lib/checkout-settings", () => ({
@@ -130,6 +144,7 @@ vi.mock("../lib/integrations/rentcast", () => ({
 }));
 
 vi.mock("../lib/integrations/stripe-client", () => ({
+  getStripeClient: mocks.getStripeClient,
   getStripeMode: vi.fn(() => "test"),
   isStripeMockMode: vi.fn(() => true),
 }));
@@ -139,7 +154,7 @@ vi.mock("../lib/integrations/stripe-connect", () => ({
 }));
 
 vi.mock("../lib/integrations/stripe-payments", () => ({
-  createStripeCheckoutSession: vi.fn(),
+  createStripeCheckoutSession: mocks.createStripeCheckoutSession,
   getOrCreateStripeCustomer: vi.fn(),
   parseStripeWebhookEvent: vi.fn(),
   retrieveStripeCheckoutSession: mocks.retrieveStripeSession,
@@ -183,6 +198,16 @@ const buildApp = (userId: string | null = null) => {
       role: null,
     });
     c.set("session", { id: "session" });
+    return await next();
+  });
+  return app.route("/checkout", checkoutRoutes);
+};
+
+const buildGuestApp = () => {
+  const app = new Hono<AppEnv>().use("*", async (c, next) => {
+    c.set("requestId", "test-request");
+    c.set("user", null);
+    c.set("session", null);
     return await next();
   });
   return app.route("/checkout", checkoutRoutes);
@@ -473,5 +498,290 @@ describe("POST /checkout/send-login-code", () => {
     expect(await response.json()).toEqual({
       error: "Sign-in code could not be sent",
     });
+  });
+});
+
+describe("POST /checkout/provider", () => {
+  beforeEach(() => {
+    mocks.createStripeCheckoutSession.mockResolvedValue({
+      id: "cs_provider_1",
+      mode: "payment",
+      subscriptionId: null,
+      url: "https://stripe.test/provider",
+    });
+    mocks.signUpEmail.mockResolvedValue({
+      user: {
+        email: "provider@example.com",
+        id: "user_provider_1",
+        name: "Jamie Provider",
+      },
+    });
+    mocks.dbInsert.mockReturnValue({
+      values: () => ({
+        onConflictDoUpdate: () => ({
+          returning: () => [],
+        }),
+      }),
+    });
+  });
+
+  it("requires a password for a new provider account", async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(400);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+  });
+
+  it("rejects an existing email instead of attaching provider onboarding", async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      emailVerified: true,
+      id: "user_existing",
+    });
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        password: "chosen-password",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(409);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("lets an authenticated provider resume verification", async () => {
+    mocks.workersFindFirst.mockResolvedValue(null);
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerEmail: "owner@example.com",
+        metadata: expect.objectContaining({
+          providerUserId: "user_provider_1",
+          type: "provider_express_onboarding",
+        }),
+      })
+    );
+  });
+
+  it("reuses an open verification session instead of creating another", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_open_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockResolvedValue({
+            status: "open",
+            url: "https://stripe.test/open",
+          }),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      url: "https://stripe.test/open",
+    });
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("blocks resume while a completed delayed payment is still unsettled", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_complete_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockResolvedValue({
+            payment_status: "unpaid",
+            status: "complete",
+          }),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("blocks resume when a completed payment is awaiting webhook finalization", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_paid_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockResolvedValue({
+            payment_status: "paid",
+            status: "complete",
+          }),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("mints a fresh session when the stored Stripe session is gone", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_missing_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockRejectedValue(
+            Object.assign(new Error("No such checkout session"), {
+              code: "resource_missing",
+              statusCode: 404,
+            })
+          ),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
+  });
+
+  it("does not let a paid provider start a second verification charge", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationPaidAt: new Date(),
+      userId: "user_provider_1",
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects a guest using a saved address id", async () => {
+    const response = await buildGuestApp().request("/checkout/confirm", {
+      body: JSON.stringify({
+        addressId: 11,
+        contact: {
+          email: "victim@example.com",
+          name: "Victim Customer",
+          phone: "5015550101",
+        },
+        items: [{ itemKind: "lawncare", planId: "groundskeeper-one-time" }],
+        paymentOption: "pay_full",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "Sign in to book with a saved address.",
+    });
+    expect(mocks.dbAddressFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("uses the applicant's password and never a hardcoded default", async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        password: "chosen-password",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.signUpEmail).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        email: "provider@example.com",
+        password: "chosen-password",
+      }),
+    });
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
   });
 });

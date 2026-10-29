@@ -1,10 +1,9 @@
 import { db, desc, eq } from "@callcastlecare/db";
 import { markets } from "@callcastlecare/db/schema/index";
-import { env } from "@callcastlecare/env/server";
-import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
 
+import { requireAdmin } from "../lib/admin";
 import { logger } from "../lib/logger";
 import type { AppEnv } from "../types";
 
@@ -25,22 +24,6 @@ const upsertMarketSchema = z.object({
     .transform((value) => value.toUpperCase()),
   travelFeesEnabled: z.boolean().optional(),
 });
-
-const requireAdmin = (c: Context<AppEnv>) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  const isAdmin =
-    user.role === "admin" ||
-    user.email.toLowerCase() === env.ADMIN_EMAIL.toLowerCase();
-  if (!isAdmin) {
-    return c.json({ error: "forbidden" }, 403);
-  }
-
-  return null;
-};
 
 const resolveMode = (input: {
   activeProCount: number;

@@ -276,16 +276,32 @@ const updateWorkerConnectState = async (
 
 export const driverRoutes = new Hono<AppEnv>()
   .post("/connect/status", async (c) => {
-    const workerResult = await requireWorkerProfile(c);
-    if (workerResult.error) {
-      return workerResult.error;
+    const userResult = requireUser(c);
+    if (userResult.error) {
+      return userResult.error;
     }
-    if (!workerResult.worker.stripeAccountId) {
+
+    const workerResult = await requireWorkerForUser(userResult.user);
+    if (!workerResult) {
       return c.json(
         {
           accountId: null,
-          onboardingStatus: workerResult.worker.onboardingStatus,
+          onboardingStatus: "none",
           payoutsEnabled: false,
+          providerVerificationPaidAt: null,
+          status: "not_started",
+        },
+        200
+      );
+    }
+    if (!workerResult.stripeAccountId) {
+      return c.json(
+        {
+          accountId: null,
+          onboardingStatus: workerResult.onboardingStatus,
+          payoutsEnabled: false,
+          providerVerificationPaidAt:
+            workerResult.providerVerificationPaidAt?.toISOString() ?? null,
           status: "not_started",
         },
         200
@@ -294,12 +310,9 @@ export const driverRoutes = new Hono<AppEnv>()
 
     try {
       const state = await retrieveConnectAccountState(
-        workerResult.worker.stripeAccountId
+        workerResult.stripeAccountId
       );
-      const worker = await updateWorkerConnectState(
-        workerResult.worker.id,
-        state
-      );
+      const worker = await updateWorkerConnectState(workerResult.id, state);
       if (worker && state.status === "ready") {
         await releasePendingWorkerPayouts(worker.id);
       }
@@ -307,8 +320,13 @@ export const driverRoutes = new Hono<AppEnv>()
         {
           accountId: state.accountId,
           onboardingStatus:
-            worker?.onboardingStatus ?? workerResult.worker.onboardingStatus,
+            worker?.onboardingStatus ?? workerResult.onboardingStatus,
           payoutsEnabled: state.payoutsEnabled,
+          providerVerificationPaidAt:
+            (
+              worker?.providerVerificationPaidAt ??
+              workerResult.providerVerificationPaidAt
+            )?.toISOString() ?? null,
           status: worker?.stripeAccountStatus ?? state.status,
           transferCapabilityStatus: state.transferCapabilityStatus,
         },
@@ -319,7 +337,7 @@ export const driverRoutes = new Hono<AppEnv>()
         {
           err: error,
           requestId: c.get("requestId"),
-          workerId: workerResult.worker.id,
+          workerId: workerResult.id,
         },
         "stripe_connect:status_refresh_failed"
       );

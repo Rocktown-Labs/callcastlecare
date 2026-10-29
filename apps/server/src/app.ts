@@ -7,10 +7,13 @@ import {
 } from "@callcastlecare/env/server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
 import notFound from "stoker/middlewares/not-found";
 import onError from "stoker/middlewares/on-error";
 
+import { toPublicSession, toPublicUser } from "./lib/auth";
 import { requestLogger, logger } from "./lib/logger";
+import { getRuntimeEnv, isOriginAllowed, originGuard } from "./lib/origin";
 import { configureQueue } from "./lib/queue";
 import { addressesRoutes } from "./routes/addresses";
 import { adminRoutes } from "./routes/admin";
@@ -90,6 +93,14 @@ const getErrorLogFields = (error: unknown) => {
 };
 
 app.use(requestLogger());
+app.use(
+  secureHeaders({
+    // The web and API are separate origins; private media is loaded by <img>
+    // from the web origin and must remain readable there.
+    crossOriginResourcePolicy: "cross-origin",
+  })
+);
+app.use("/*", originGuard());
 
 // Bind the database and auth stack to the request lifecycle. On Cloudflare
 // Workers the environment arrives via `c.env`; on the local Node dev server it
@@ -149,20 +160,17 @@ app.use(
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
     origin: (origin, c) => {
-      const runtimeCorsOrigin =
-        (c.env as Record<string, string | undefined>)?.CORS_ORIGIN ??
-        validatedEnv.CORS_ORIGIN;
+      if (!origin) {
+        return;
+      }
 
-      if (!origin || !runtimeCorsOrigin) {
-        return origin || "*";
-      }
-      if (runtimeCorsOrigin === "*" || runtimeCorsOrigin === origin) {
-        return origin;
-      }
-      if (origin.endsWith(".workers.dev") || origin.includes("localhost")) {
-        return origin;
-      }
-      return runtimeCorsOrigin;
+      const runtimeEnv = getRuntimeEnv(c);
+      const configured = runtimeEnv.CORS_ORIGIN ?? validatedEnv.CORS_ORIGIN;
+      const nodeEnv = runtimeEnv.NODE_ENV ?? validatedEnv.NODE_ENV;
+
+      return isOriginAllowed({ configured, nodeEnv, origin })
+        ? origin
+        : undefined;
     },
   })
 );
@@ -185,7 +193,14 @@ export const apiRoutes = new Hono<AppEnv>()
       user.role === "admin" ||
       user.email.toLowerCase() === validatedEnv.ADMIN_EMAIL.toLowerCase();
 
-    return c.json({ isAdmin, session, user }, 200);
+    return c.json(
+      {
+        isAdmin,
+        session: toPublicSession(session),
+        user: toPublicUser(user),
+      },
+      200
+    );
   })
   .route("/checkout", checkoutRoutes)
   .route("/me", meRoutes)
