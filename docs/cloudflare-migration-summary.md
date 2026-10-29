@@ -62,8 +62,12 @@ This document summarizes the work done to migrate the CastleCare monorepo from V
 
 ## Current live deployment
 
-- Server: `https://castlecare-server.rocktown-labs.workers.dev`
-- Web: `https://castlecare-web.rocktown-labs.workers.dev`
+- Server: `https://api.callcastlecare.com`
+- Web: `https://callcastlecare.com`
+- `www.callcastlecare.com` permanently redirects to `https://callcastlecare.com`.
+- Workers.dev URLs remain available as fallbacks while the custom domains settle.
+
+The Alchemy stack declares both custom domains, so `alchemy deploy` provisions the DNS records and edge certificates automatically. The `callcastlecare.com` zone must already exist in the target Cloudflare account.
 
 Both respond successfully:
 
@@ -83,17 +87,14 @@ Both respond successfully:
    - Without it, transactional and auth emails will silently fail.
    - Add it to the Alchemy env map and to the deployment context.
 
-3. **Transfer `callcastlecare.com`**
-   - Add custom-domain records in `packages/infra/alchemy.run.ts` once DNS is ready.
-   - Update `CORS_ORIGIN` from the workers.dev placeholder to `https://callcastlecare.com`.
+3. **Verify the `callcastlecare.com` zone**
+   - The zone must be active in the Cloudflare account that Alchemy deploys to before `alchemy deploy` can attach the custom domains.
+   - `CORS_ORIGIN` defaults to `https://callcastlecare.com` and `STRIPE_WEBHOOK_BASE_URL` defaults to `https://api.callcastlecare.com`; override either only if the deployment hostnames change.
 
-4. **Update `STRIPE_WEBHOOK_PUBLIC_URL`**
-   - Point it to the final API URL after the domain transfer.
+4. **Update driver app config**
+   - Set `EXPO_PUBLIC_SERVER_URL=https://api.callcastlecare.com` in the driver app `.env` (`apps/driver/.env`).
 
-5. **Update driver app config**
-   - Set `EXPO_PUBLIC_SERVER_URL=https://castlecare-server.rocktown-labs.workers.dev` in the driver app `.env` (`apps/driver/.env`) until the custom domain is live.
-
-6. **Clean up stale Vercel references**
+5. **Clean up stale Vercel references**
    - `README.md` still documents `bun run dev:vercel`, `env:preview`, `deploy:prod`, and Vercel deployment steps.
    - `.vercelignore` and `bts.jsonc` still reference Vercel-only workflows.
    - These should be updated/removed in a small follow-up PR.
