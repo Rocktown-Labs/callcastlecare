@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/dashboard/app-shell";
+import HomesFeatureToggle from "@/components/home/homes-feature-toggle";
 import { authClient } from "@/lib/auth-client";
 import { getServerUrl } from "@/lib/server-url";
 
@@ -343,6 +344,7 @@ const AdminSettingsRoute = () => {
                 </section>
               </div>
 
+              <HomesFeatureToggle />
               <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-start gap-2">
                   <Banknote className="mt-0.5 size-5 text-lime-600" />

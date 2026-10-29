@@ -1,3 +1,4 @@
+/* eslint-disable oxc/no-barrel-file -- Shared API contracts retain the established package entry point. */
 import type { Hono } from "hono";
 import { hc } from "hono/client";
 

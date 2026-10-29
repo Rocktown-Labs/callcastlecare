@@ -20,6 +20,7 @@ import { adminRoutes } from "./routes/admin";
 import { checkoutRoutes } from "./routes/checkout";
 import { disputeRoutes } from "./routes/disputes";
 import { driverRoutes } from "./routes/driver";
+import { featureRoutes } from "./routes/features";
 import { laundryBagRoutes } from "./routes/laundry-bags";
 import { locationRoutes } from "./routes/locations";
 import { marketRoutes } from "./routes/markets";
@@ -202,6 +203,7 @@ export const apiRoutes = new Hono<AppEnv>()
       200
     );
   })
+  .route("/features", featureRoutes)
   .route("/checkout", checkoutRoutes)
   .route("/me", meRoutes)
   .route("/addresses", addressesRoutes)

@@ -9,6 +9,11 @@ import {
   STANDARD_DEPOSIT_CENTS,
 } from "@callcastlecare/api";
 import type { CheckoutPreviewRequest } from "@callcastlecare/api";
+import {
+  getHomePriceCents,
+  homeConfigurationSchema,
+  homeExteriorColors,
+} from "@callcastlecare/api/homes";
 import { auth } from "@callcastlecare/auth";
 import {
   getOtpEmailContent,
@@ -55,6 +60,7 @@ import {
   getComboServiceTypes,
   isRecurringCheckoutItem,
 } from "../lib/domain/checkout";
+import { getFeatureSettings } from "../lib/feature-settings";
 import { sendEmail } from "../lib/integrations/email";
 import { verifyAddressWithRadar } from "../lib/integrations/radar";
 import { lookupPropertyWithRentCast } from "../lib/integrations/rentcast";
@@ -236,6 +242,13 @@ const applyCatalogPriceOverrides = (
   return { ...preview, lineItems, subtotalCents, totalCents };
 };
 
+const getHomeStripeDescription = (metadata: Record<string, unknown>) => {
+  const configuration = homeConfigurationSchema.parse(
+    metadata.homeConfiguration
+  );
+  return `${homeExteriorColors[configuration.exteriorColor].name}${configuration.emptyContainer ? "; Empty Container add-on" : ""}. $5,000 deposit credited toward the configured home price of $${(getHomePriceCents(configuration) / 100).toLocaleString("en-US")}. Delivery and site costs confirmed separately.`;
+};
+
 const getStripeLineItems = (
   lineItems: ReturnType<typeof computeCheckoutPreview>["lineItems"],
   catalogRows: (typeof stripeCatalogItems.$inferSelect)[]
@@ -256,7 +269,10 @@ const getStripeLineItems = (
     return {
       amountCents: lineItem.totalPriceCents,
       currency: "usd",
-      description: lineItem.label,
+      description:
+        lineItem.itemKind === "home_preorder"
+          ? getHomeStripeDescription(lineItem.metadata)
+          : lineItem.label,
       name: lineItem.label,
       ...(canUseSyncedPrice && catalogItem?.stripePriceId
         ? { priceId: catalogItem.stripePriceId }
@@ -702,6 +718,21 @@ const clearProviderVerificationSession = async (event: StripeWebhookEvent) => {
     .where(target);
 };
 
+const updateUnpaidHomePreorders = async (
+  stripeCheckoutSessionId: string,
+  status: "cancelled" | "failed"
+) => {
+  await db
+    .update(homePreorders)
+    .set({ status, updatedAt: new Date() })
+    .where(
+      and(
+        eq(homePreorders.stripeCheckoutSessionId, stripeCheckoutSessionId),
+        eq(homePreorders.status, "pending_payment")
+      )
+    );
+};
+
 const handleCheckoutSessionAsyncPaymentFailed = async (
   event: StripeWebhookEvent
 ) => {
@@ -718,6 +749,7 @@ const handleCheckoutSessionAsyncPaymentFailed = async (
     .where(
       eq(checkoutSessions.stripeCheckoutSessionId, stripeCheckoutSessionId)
     );
+  await updateUnpaidHomePreorders(stripeCheckoutSessionId, "failed");
 };
 
 const handleSubscriptionEvent = async (event: StripeWebhookEvent) => {
@@ -804,6 +836,7 @@ const handleCheckoutSessionExpired = async (event: StripeWebhookEvent) => {
       updatedAt: new Date(),
     })
     .where(eq(checkoutSessions.stripeCheckoutSessionId, stripeSessionId));
+  await updateUnpaidHomePreorders(stripeSessionId, "cancelled");
 
   logger.info(
     { stripeCheckoutSessionId: stripeSessionId },
@@ -1349,6 +1382,15 @@ const getCheckoutPricing = async (input: {
   const hasRecurringCheckout = input.checkout.items.some(
     isRecurringCheckoutItem
   );
+  if (
+    input.address.state.toUpperCase() !== "AR" &&
+    input.checkout.items.some((item) => item.itemKind === "home_preorder")
+  ) {
+    return {
+      error: "Home preorders are currently available for Arkansas sites only.",
+      status: 409 as const,
+    } as const;
+  }
   if (input.address.state.toUpperCase() !== "AR" && !hasRecurringCheckout) {
     return {
       error:
@@ -1518,6 +1560,31 @@ const reserveCheckoutSession = (input: {
       throw new Error("Failed to create checkout session");
     }
 
+    await Promise.all(
+      input.preview.lineItems.map(async (lineItem) => {
+        if (lineItem.itemKind !== "home_preorder") {
+          return;
+        }
+        const configuration = homeConfigurationSchema.parse(
+          lineItem.metadata.homeConfiguration
+        );
+        const [quote] = await tx
+          .insert(homeQuotes)
+          .values({
+            addressId: input.address.id,
+            customerId: input.customerId,
+            quotePayloadJson: configuration,
+            status: "ready",
+            totalPriceCents: getHomePriceCents(configuration),
+          })
+          .returning();
+        if (!quote) {
+          throw new Error("Failed to save home configuration");
+        }
+        lineItem.metadata.homeQuoteId = quote.id;
+      })
+    );
+
     await tx.insert(checkoutItems).values(
       input.preview.lineItems.map((lineItem) => ({
         basePriceCents: lineItem.basePriceCents,
@@ -1581,6 +1648,28 @@ const reserveCheckoutSession = (input: {
 
 const validateCheckoutPaymentOption = async (input: ParsedCheckoutConfirm) => {
   const hasRecurringCheckout = input.items.some(isRecurringCheckoutItem);
+  const hasHomes = input.items.some(
+    (item) => item.itemKind === "home_preorder"
+  );
+  if (hasHomes) {
+    const settings = await getFeatureSettings();
+    if (!settings.homesEnabled) {
+      return {
+        error: "CastleCare Homes is currently unavailable.",
+        hasRecurringCheckout,
+      } as const;
+    }
+    if (
+      input.items.some((item) => item.itemKind !== "home_preorder") ||
+      input.paymentOption !== "pay_full" ||
+      input.tipAmountCents
+    ) {
+      return {
+        error: "Home deposits must be checked out separately and paid in full.",
+        hasRecurringCheckout,
+      } as const;
+    }
+  }
   if (hasRecurringCheckout && input.paymentOption !== "pay_full") {
     return {
       error: "Recurring plans require payment in full today.",
@@ -1685,7 +1774,10 @@ const handleCheckoutConfirm = async (c: HonoContext) => {
   }
 
   const origin = getCheckoutOrigin(c);
-  const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
+  const homesOnly = parsed.data.items.every(
+    (item) => item.itemKind === "home_preorder"
+  );
+  const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}${homesOnly ? "&type=homes" : ""}`;
   let stripeCheckoutSession;
   try {
     const stripeCustomerId = await getOrCreateStripeCustomer({
@@ -1695,7 +1787,9 @@ const handleCheckoutConfirm = async (c: HonoContext) => {
     });
     stripeCheckoutSession = await createStripeCheckoutSession({
       amountDueCents: pricing.amountDueCents,
-      cancelUrl: `${origin}/book?checkout=cancelled`,
+      cancelUrl: homesOnly
+        ? `${origin}/#homes`
+        : `${origin}/book?checkout=cancelled`,
       checkoutSessionId: checkoutSession.id,
       customerEmail: parsed.data.contact.email,
       expiresAt: new Date(Date.now() + CHECKOUT_SLOT_HOLD_MS),
@@ -1730,6 +1824,12 @@ const handleCheckoutConfirm = async (c: HonoContext) => {
       .update(checkoutSessions)
       .set({ status: "failed", updatedAt: new Date() })
       .where(eq(checkoutSessions.id, checkoutSession.id));
+    if (homesOnly) {
+      await db
+        .update(homePreorders)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(homePreorders.checkoutSessionId, checkoutSession.id));
+    }
     logger.error(
       {
         checkoutSessionId: checkoutSession.id,
@@ -1749,6 +1849,15 @@ const handleCheckoutConfirm = async (c: HonoContext) => {
       updatedAt: new Date(),
     })
     .where(eq(checkoutSessions.id, checkoutSession.id));
+  if (homesOnly) {
+    await db
+      .update(homePreorders)
+      .set({
+        stripeCheckoutSessionId: stripeCheckoutSession.id,
+        updatedAt: new Date(),
+      })
+      .where(eq(homePreorders.checkoutSessionId, checkoutSession.id));
+  }
 
   return c.json(
     {
@@ -1793,6 +1902,22 @@ const formatCustomerAddress = (
   return "Address on file";
 };
 
+const getHomeReceiptTotalCents = (
+  items: { metadataJson: unknown; basePriceCents: number }[]
+) => {
+  let totalCents = 0;
+  for (const item of items) {
+    const metadata = z
+      .object({ homeTotalCents: z.number().int().nonnegative() })
+      .safeParse(item.metadataJson);
+    totalCents += metadata.success
+      ? metadata.data.homeTotalCents
+      : item.basePriceCents;
+  }
+  return totalCents;
+};
+
+// eslint-disable-next-line complexity -- Receipt data covers both service bookings and home deposits.
 const buildCheckoutAccessTokenPayload = async (
   checkoutSession: typeof checkoutSessions.$inferSelect,
   currentUserId: string | null | undefined
@@ -1831,7 +1956,12 @@ const buildCheckoutAccessTokenPayload = async (
   );
 
   const { totalCents } = checkoutSession;
-  const depositAmountCents = getCheckoutDepositCents(totalCents);
+  const homesOnly =
+    items.length > 0 &&
+    items.every((item) => item.itemKind === "home_preorder");
+  const depositAmountCents = homesOnly
+    ? totalCents
+    : getCheckoutDepositCents(totalCents);
   const isPaidInFull =
     checkoutSession.mode === "payment" && totalCents <= STANDARD_DEPOSIT_CENTS;
 
@@ -1842,7 +1972,10 @@ const buildCheckoutAccessTokenPayload = async (
   return {
     accessToken: createCheckoutAccessToken(checkoutSession.id),
     address: formatCustomerAddress(address),
-    appointmentWindow,
+    appointmentWindow: homesOnly
+      ? "Delivery confirmed after project review"
+      : appointmentWindow,
+    ...(homesOnly ? { checkoutKind: "homes" } : {}),
     customerEmail: customer?.email ?? null,
     isAuthenticated,
     maskedEmail: customer ? maskEmail(customer.email) : null,
@@ -1851,7 +1984,7 @@ const buildCheckoutAccessTokenPayload = async (
     payment: {
       depositCents: depositAmountCents,
       isPaidInFull,
-      totalCents,
+      totalCents: homesOnly ? getHomeReceiptTotalCents(items) : totalCents,
     },
     services: serviceLabels.length > 0 ? serviceLabels : ["CastleCare Service"],
   };

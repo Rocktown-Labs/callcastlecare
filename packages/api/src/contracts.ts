@@ -1,3 +1,5 @@
+import type { HomeConfiguration } from "./homes";
+
 export const TimingType = {
   Asap: "asap",
   Scheduled: "scheduled",
@@ -53,6 +55,7 @@ export interface CheckoutPreviewItemInput {
   itemKind: CheckoutItemKind;
   planId?: string;
   homeQuoteId?: number;
+  homeConfiguration?: HomeConfiguration;
   scheduledStartAt?: string;
   scheduledEndAt?: string;
   timingType?: TimingType;

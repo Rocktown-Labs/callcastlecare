@@ -76,3 +76,15 @@ stripe trigger invoice.paid
 ```
 
 Use the Stripe Dashboard or CLI to verify the Checkout Session mode, recurring Price ID, local checkout ID metadata, subscription ID, webhook delivery, and Connect transfer. Never fulfill from a browser success redirect alone.
+
+## CastleCare Homes preorders
+
+Apply migration `0024_short_master_mold` before deploying the Homes feature. It creates `feature_settings`; a missing settings row defaults Homes to enabled. A database read error does not enable the feature.
+
+The Homes section is the last homepage section before the footer. `/homes` redirects to `/#homes`. Sign in as an admin, open `/admin/settings`, and use **Feature availability → CastleCare Homes** to hide the section and navigation and block new preorder checkouts. Other open pages refresh availability every 30 seconds; the server checks it on every checkout. Existing Stripe sessions and their payment webhooks continue working after the toggle is disabled.
+
+Homes has its own saved cart and checkout, separate from scheduled service bookings. The base prices are $40,000 residential, $65,000 commercial, and $85,000 multi-unit; an empty container adds $8,000 and paid exterior finishes add $500 or $700. Amounts are stored and calculated in cents. The $5,000 preorder deposit is credited toward the configured total; service technology/travel fees do not apply. Preorders currently require an Arkansas site address. Site costs and delivery are confirmed separately.
+
+Checkout uses the existing Stripe commerce integration and signed webhook endpoint, with server-priced Checkout line items. No new Stripe keys or separate webhook endpoint are needed. A catalog sync is not required for these one-time inline prices. Configuration and full-price snapshots are stored in `home_quotes` and checkout item metadata, linked to `home_preorders`. Payment success marks the preorder paid without creating a service dispatch. Expired sessions cancel unpaid preorders; asynchronous payment failures mark them failed. The receipt shows the actual deposit and remaining home balance.
+
+Validation: `bun run check-types`, `bun run --cwd apps/server test`, `bun run --cwd apps/web test`, `bun run --cwd apps/web test:e2e`, and `bun run --cwd apps/web build`. Browser tests mock API and Stripe navigation and do not place a charge. The Playwright configuration uses installed Google Chrome; install Chrome before running it on a new machine.

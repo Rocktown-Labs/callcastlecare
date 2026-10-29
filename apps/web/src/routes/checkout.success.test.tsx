@@ -172,4 +172,37 @@ describe("CheckoutSuccessPage", () => {
       screen.getByRole("button", { name: /verify email & continue/iu })
     ).toBeTruthy();
   });
+  it("shows a Homes deposit receipt with the remaining home balance", async () => {
+    searchState.type = "homes";
+    searchState.session_id = "cs_home_test";
+    localStorage.setItem("castlecare-homes-cart-v1", "saved-configuration");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        appointmentWindow: "Delivery confirmed after project review",
+        checkoutKind: "homes",
+        payment: {
+          depositCents: 500_000,
+          isPaidInFull: false,
+          totalCents: 4_870_000,
+        },
+        services: ["CastleCare Residential"],
+      })
+    );
+    render(<CheckoutSuccessPage />);
+    expect(await screen.findByText("Preorder Summary")).toBeTruthy();
+    expect(localStorage.getItem("castlecare-homes-cart-v1")).toBeNull();
+    expect(screen.getByText("$5,000.00 deposit paid")).toBeTruthy();
+    expect(screen.getByText(/43,700.00 home balance/u)).toBeTruthy();
+    expect(
+      screen.getByText("Delivery confirmed after project review")
+    ).toBeTruthy();
+  });
+  it("does not confirm a Homes deposit before Stripe verification", () => {
+    searchState.type = "homes";
+    render(<CheckoutSuccessPage />);
+    expect(screen.getByText("Verifying payment")).toBeTruthy();
+    expect(
+      screen.queryByText("Your CastleCare Homes deposit is received.")
+    ).toBeNull();
+  });
 });

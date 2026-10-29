@@ -1,3 +1,4 @@
+import { homeConfigurationSchema } from "@callcastlecare/api/homes";
 import {
   optionalPhoneSchema,
   phoneSchema,
@@ -19,6 +20,7 @@ export const checkoutPreviewItemSchema = z
       .optional(),
     grassHeight: z.enum(["low", "medium", "tall"]).optional(),
     hasPets: z.enum(["yes", "no"]).optional(),
+    homeConfiguration: homeConfigurationSchema.optional(),
     homeQuoteId: z.number().int().positive().optional(),
     isSubscription: z.boolean().optional(),
     itemKind: z.enum([
@@ -65,6 +67,31 @@ export const checkoutPreviewItemSchema = z
     tipAmountCents: z.number().int().nonnegative().optional(),
   })
   .superRefine((value, ctx) => {
+    if (value.itemKind === "home_preorder" && !value.homeConfiguration) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Home configuration is required",
+        path: ["homeConfiguration"],
+      });
+    }
+    if (
+      value.itemKind === "home_preorder" &&
+      (value.planId ||
+        value.homeQuoteId ||
+        value.isSubscription ||
+        value.frequency ||
+        value.timingType === "scheduled" ||
+        value.scheduledStartAt ||
+        value.scheduledEndAt ||
+        value.tipAmountCents)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Home preorders accept a configuration and fixed deposit only.",
+        path: ["homeConfiguration"],
+      });
+    }
     if (value.timingType !== "scheduled") {
       return;
     }

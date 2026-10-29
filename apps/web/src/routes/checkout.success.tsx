@@ -13,6 +13,7 @@ import {
   useSearch,
 } from "@tanstack/react-router";
 import {
+  House,
   ArrowRight,
   CalendarClock,
   Check,
@@ -33,6 +34,7 @@ import { z } from "zod";
 
 import MarketingLayout from "@/components/home/marketing-layout";
 import { signInWithEmailOtp } from "@/lib/auth/email-otp";
+import { homesCartStorageKey } from "@/lib/homes-cart";
 import { getServerUrl } from "@/lib/server-url";
 
 const searchSchema = z.object({
@@ -42,6 +44,7 @@ const searchSchema = z.object({
 });
 
 interface CheckoutOrderPayload {
+  checkoutKind?: "homes";
   accessToken?: string;
   address?: string | null;
   appointmentWindow?: string | null;
@@ -391,6 +394,9 @@ const useCheckoutSuccessPayload = (input: {
           setCheckoutAccessToken(payload.accessToken);
         }
         setOrderData(payload);
+        if (payload.checkoutKind === "homes") {
+          localStorage.removeItem(homesCartStorageKey);
+        }
       } catch {
         // The email form remains available as a safe fallback.
       }
@@ -428,7 +434,9 @@ const BookingSummary = ({
   return (
     <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.04] p-5 sm:p-6">
       <h2 className="text-xs font-bold uppercase tracking-[0.16em] text-lime-300">
-        Booking Summary
+        {orderData.checkoutKind === "homes"
+          ? "Preorder Summary"
+          : "Booking Summary"}
       </h2>
       <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="space-y-1">
@@ -452,7 +460,9 @@ const BookingSummary = ({
         </div>
         <div className="space-y-1">
           <p className="text-xs font-medium text-slate-400">
-            Appointment Window
+            {orderData.checkoutKind === "homes"
+              ? "Delivery"
+              : "Appointment Window"}
           </p>
           <div className="flex items-start gap-2 pt-0.5">
             <CalendarClock
@@ -490,7 +500,9 @@ const BookingSummary = ({
                   (orderData.payment?.totalCents ?? 0) -
                     (orderData.payment?.depositCents ?? 0)
                 )}{" "}
-                balance due upon completion
+                {orderData.checkoutKind === "homes"
+                  ? "home balance, finalized with CastleCare"
+                  : "balance due upon completion"}
               </p>
             ) : null}
           </div>
@@ -498,6 +510,65 @@ const BookingSummary = ({
       </div>
     </div>
   );
+};
+
+const getCheckoutPresentation = (
+  type: string | undefined,
+  email: string,
+  hasVerifiedPayment: boolean
+) => {
+  if (type === "homes" && !hasVerifiedPayment) {
+    return {
+      description:
+        "We’re checking your payment with Stripe. If your payment is still processing, keep your Stripe receipt and contact CastleCare before placing another preorder.",
+      status: "Verifying payment",
+      steps: [],
+      title: "Checking your CastleCare Homes deposit.",
+    };
+  }
+  if (type === "homes") {
+    return {
+      description:
+        "Thank you for reserving a CastleCare home. Your deposit does not confirm a delivery date. We’ll contact you to finalize your project.",
+      status: "Payment received",
+      steps: [
+        {
+          description:
+            "Your $5,000 deposit is credited toward the configured home price.",
+          icon: House,
+          title: "Your home deposit is recorded",
+        },
+        {
+          description:
+            "CastleCare will contact you to confirm plans, site costs, delivery, and the remaining balance.",
+          icon: ReceiptText,
+          title: "Finalize your project",
+        },
+        {
+          description:
+            "Your payment and selected configuration are saved with your preorder.",
+          icon: ShieldCheck,
+          title: "Keep your receipt",
+        },
+      ],
+      title: "Your CastleCare Homes deposit is received.",
+    };
+  }
+  if (type === "provider") {
+    return {
+      description:
+        "Your $50 background check and MVR authorization payment was accepted. Verify your email to finish setting up your provider account.",
+      status: "Authorization payment received",
+      steps: providerSteps,
+      title: "Your provider setup is ready for the next step.",
+    };
+  }
+  return {
+    description: `Your payment was accepted, and we’re preparing your service details. We’ve sent your confirmation receipt to ${email}.`,
+    status: "Payment received",
+    steps: customerSteps,
+    title: "Your CastleCare booking is confirmed.",
+  };
 };
 
 export const CheckoutSuccessPage = () => {
@@ -614,7 +685,13 @@ export const CheckoutSuccessPage = () => {
     }
   };
 
-  const steps = isProviderFlow ? providerSteps : customerSteps;
+  const { steps, title, description, status } = getCheckoutPresentation(
+    search.type,
+    orderData?.maskedEmail ??
+      orderData?.customerEmail ??
+      "the email used at checkout",
+    orderData !== null
+  );
 
   return (
     <MarketingLayout>
@@ -637,9 +714,7 @@ export const CheckoutSuccessPage = () => {
                       className="inline-flex items-center gap-2 rounded-full border border-lime-300/30 bg-lime-300/10 px-3.5 py-1.5 text-sm font-bold text-lime-300"
                     >
                       <CheckCircle2 aria-hidden="true" className="size-4" />
-                      {isProviderFlow
-                        ? "Authorization payment received"
-                        : "Payment received"}
+                      {status}
                     </output>
 
                     {(orderData?.orderNumber ?? orderData?.orderId) && (
@@ -672,14 +747,10 @@ export const CheckoutSuccessPage = () => {
                     className="mt-6 max-w-3xl text-balance text-4xl font-extrabold tracking-tight text-white sm:text-5xl"
                     id="checkout-success-title"
                   >
-                    {isProviderFlow
-                      ? "Your provider setup is ready for the next step."
-                      : "Your CastleCare booking is confirmed."}
+                    {title}
                   </h1>
                   <p className="mt-5 max-w-2xl text-pretty text-base leading-7 text-slate-300 sm:text-lg">
-                    {isProviderFlow
-                      ? "Your $50 background check and MVR authorization payment was accepted. Verify your email to finish setting up your provider account."
-                      : `Your payment was accepted, and we’re preparing your service details. We’ve sent your confirmation receipt to ${orderData?.maskedEmail ?? orderData?.customerEmail ?? "the email used at checkout"}.`}
+                    {description}
                   </p>
                 </div>
 

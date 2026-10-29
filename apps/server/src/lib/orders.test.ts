@@ -14,12 +14,14 @@ const mocks = vi.hoisted(() => ({
   dispatchOrder: vi.fn(),
   eq: vi.fn(),
   execute: vi.fn(),
+  homePreorders: {},
   logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
   orderInsertReturning: vi.fn(),
   orders: {},
   publishOutboxEvent: vi.fn(),
   sendEmail: vi.fn(),
   serviceLegs: {},
+  txHomePreorderFindFirst: vi.fn(),
   txInsert: vi.fn(),
   txOrdersFindMany: vi.fn(),
   txQueryCheckoutItems: vi.fn(),
@@ -54,7 +56,7 @@ vi.mock("@callcastlecare/db/schema/index", () => ({
   checkoutItems: mocks.checkoutItems,
   checkoutSessions: mocks.checkoutSessions,
   customers: mocks.customers,
-  homePreorders: {},
+  homePreorders: mocks.homePreorders,
   orderItems: {},
   orderStatusHistory: {},
   orders: mocks.orders,
@@ -185,6 +187,7 @@ beforeEach(() => {
     insert: mocks.txInsert,
     query: {
       checkoutItems: { findMany: mocks.txQueryCheckoutItems },
+      homePreorders: { findFirst: mocks.txHomePreorderFindFirst },
       orders: { findMany: mocks.txOrdersFindMany },
     },
     update: mocks.txUpdate,
@@ -292,5 +295,39 @@ describe("finalizeCheckoutPayment", () => {
 
     expect(result.createdOrderIds).toEqual([1, 2, 3, 4]);
     expect(mocks.dispatchOrder).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("paid home preorder fulfillment", () => {
+  it("marks the existing preorder paid without dispatching service work", async () => {
+    mocks.txHomePreorderFindFirst.mockResolvedValue({ id: 44 });
+    mocks.txQueryCheckoutItems.mockResolvedValue([
+      {
+        basePriceCents: 500_000,
+        itemKind: "home_preorder",
+        metadataJson: { homeQuoteId: 55 },
+        totalPriceCents: 500_000,
+      },
+    ]);
+    const result = await finalizeCheckoutPayment({
+      checkoutSessionId: checkoutSession.id,
+      stripePaymentIntentId: "pi_home_deposit",
+    });
+    expect(result.createdOrderIds).toEqual([]);
+    expect(mocks.txUpdate).toHaveBeenCalledWith(mocks.homePreorders);
+    expect(mocks.txUpdate.mock.results[1]?.value.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "paid",
+        stripePaymentIntentId: "pi_home_deposit",
+      })
+    );
+    expect(mocks.dispatchOrder).not.toHaveBeenCalled();
+    expect(mocks.publishOutboxEvent).toHaveBeenCalledWith({
+      eventName: "home_preorder_confirmed",
+      payload: {
+        checkoutSessionId: checkoutSession.id,
+        customerId: checkoutSession.customerId,
+      },
+    });
   });
 });

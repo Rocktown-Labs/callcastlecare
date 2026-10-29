@@ -753,3 +753,33 @@ describe("POST /checkout/provider", () => {
     expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
   });
 });
+
+describe("home deposit receipt", () => {
+  it("shows the actual home deposit and saved total without a service appointment", async () => {
+    mocks.checkoutSessionFindFirst.mockResolvedValue({
+      ...checkoutSessionRow,
+      totalCents: 500_000,
+    });
+    mocks.checkoutItemsFindMany.mockResolvedValue([
+      {
+        basePriceCents: 500_000,
+        itemKind: "home_preorder",
+        label: "CastleCare Residential — $5,000 preorder deposit",
+        metadataJson: { homeTotalCents: 4_870_000 },
+      },
+    ]);
+    const response = await buildGuestApp().request(
+      "/checkout/access-token?session_id=cs_home_test"
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      appointmentWindow: "Delivery confirmed after project review",
+      checkoutKind: "homes",
+      payment: {
+        depositCents: 500_000,
+        isPaidInFull: false,
+        totalCents: 4_870_000,
+      },
+    });
+  });
+});

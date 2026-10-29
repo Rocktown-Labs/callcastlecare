@@ -8,6 +8,7 @@ export * from "./dispatch";
 export * from "./dispute";
 export * from "./enums";
 export * from "./geo";
+export * from "./feature-settings";
 export * from "./laundry";
 export * from "./laundry-bag";
 export * from "./market";

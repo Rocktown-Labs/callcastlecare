@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./homes": "./src/homes.ts",
     "./validation": "./src/validation.ts"
   },
   "scripts": {

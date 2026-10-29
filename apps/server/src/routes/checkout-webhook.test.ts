@@ -1,3 +1,4 @@
+import { homePreorders } from "@callcastlecare/db/schema/index";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -337,5 +338,24 @@ describe("provider express onboarding webhook", () => {
     });
 
     expect(response.status).toBe(400);
+  });
+  it.each([
+    ["checkout.session.expired", "cancelled"],
+    ["checkout.session.async_payment_failed", "failed"],
+  ])("updates unpaid home preorders for %s", async (type, status) => {
+    const response = await app.request("/webhook/stripe", {
+      body: JSON.stringify({
+        data: { object: { id: "cs_home" } },
+        id: `evt_${type}`,
+        type,
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+    expect(response.status).toBe(200);
+    expect(mocks.dbUpdate).toHaveBeenCalledWith(homePreorders);
+    expect(mocks.dbUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status })
+    );
   });
 });

@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import EarnCtaSection from "@/components/home/earn-cta";
 import HeroSection from "@/components/home/hero";
 import MarketingLayout from "@/components/home/marketing-layout";
+import PropertiesSection from "@/components/home/properties-section";
 import ServicesSection from "@/components/home/services";
 
 const siteUrl = "https://callcastlecare.com";
@@ -16,6 +17,7 @@ const HomeComponent = () => (
     <HeroSection />
     <ServicesSection />
     <EarnCtaSection />
+    <PropertiesSection />
   </MarketingLayout>
 );
 

@@ -18,6 +18,7 @@ import {
   getLawncarePricingTier,
   getRecurringServiceUnits,
 } from "@callcastlecare/api";
+import { getHomePriceCents, homeModels } from "@callcastlecare/api/homes";
 
 type PricingTier = "custom" | "large" | "medium" | "small";
 
@@ -140,7 +141,9 @@ const parsePlanPrice = (
   if (item.itemKind === "home_preorder") {
     return {
       basePriceCents: HOME_PREORDER_DEPOSIT_CENTS,
-      label: "Home Project Deposit",
+      label: item.homeConfiguration
+        ? `CastleCare ${homeModels[item.homeConfiguration.model].name} — $5,000 preorder deposit`
+        : "Home Project Deposit",
     };
   }
 
@@ -220,7 +223,11 @@ const getCheckoutLineItem = (
     label: parsed.label,
     metadata: {
       comboServiceTypes: parsed.comboServiceTypes ?? null,
+      homeConfiguration: item.homeConfiguration ?? null,
       homeQuoteId: item.homeQuoteId ?? null,
+      homeTotalCents: item.homeConfiguration
+        ? getHomePriceCents(item.homeConfiguration)
+        : null,
       planId: item.planId ?? null,
       pricingTier: parsed.pricingTier ?? null,
       scheduledEndAt: item.scheduledEndAt ?? null,
@@ -252,20 +259,25 @@ export const computeCheckoutPreview = (
     (sum, item) => sum + item.basePriceCents * item.quantity,
     0
   );
-  const technologyFeeCents = TECHNOLOGY_FEE_CENTS;
-  lineItems.push({
-    basePriceCents: technologyFeeCents,
-    itemKind: "lawncare",
-    label: "Technology fee",
-    metadata: { serviceType: "fee" },
-    planId: "technology-fee",
-    quantity: 1,
-    tipAmountCents: 0,
-    totalPriceCents: technologyFeeCents,
-  });
+  const homesOnly =
+    input.items.length > 0 &&
+    input.items.every((item) => item.itemKind === "home_preorder");
+  const technologyFeeCents = homesOnly ? 0 : TECHNOLOGY_FEE_CENTS;
+  if (technologyFeeCents > 0) {
+    lineItems.push({
+      basePriceCents: technologyFeeCents,
+      itemKind: "lawncare",
+      label: "Technology fee",
+      metadata: { serviceType: "fee" },
+      planId: "technology-fee",
+      quantity: 1,
+      tipAmountCents: 0,
+      totalPriceCents: technologyFeeCents,
+    });
+  }
 
   const resolvedTravel = getResolvedTravel(input);
-  const travelFeeCents = resolvedTravel.feeCents;
+  const travelFeeCents = homesOnly ? 0 : resolvedTravel.feeCents;
   if (travelFeeCents > 0) {
     lineItems.push({
       basePriceCents: travelFeeCents,

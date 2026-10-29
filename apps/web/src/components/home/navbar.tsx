@@ -5,6 +5,7 @@ import { Image } from "@unpic/react";
 import { ChevronDown, Menu, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { useFeatureSettings } from "@/lib/features";
 import { serviceCatalog } from "@/lib/service-catalog";
 
 const sectionLinks = [
@@ -13,6 +14,7 @@ const sectionLinks = [
 
 export default function Navbar() {
   const { pathname } = useLocation();
+  const { data: features } = useFeatureSettings();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [activeSection, setActiveSection] = useState("");
@@ -67,6 +69,14 @@ export default function Navbar() {
           </Link>
 
           <nav className="hidden items-center gap-7 md:flex">
+            {features?.homesEnabled ? (
+              <Link
+                to="/homes"
+                className="text-sm font-medium text-white/75 hover:text-lime-300"
+              >
+                Homes
+              </Link>
+            ) : null}
             <div className="group relative">
               <a
                 className={cn(
@@ -176,6 +186,15 @@ export default function Navbar() {
               </Button>
             </div>
             <nav className="grid gap-3">
+              {features?.homesEnabled ? (
+                <Link
+                  to="/homes"
+                  onClick={closeMenu}
+                  className="rounded-full border border-white/10 px-4 py-3 text-base font-bold text-white/85"
+                >
+                  Homes
+                </Link>
+              ) : null}
               <a
                 className="rounded-full border border-white/10 px-4 py-3 text-base font-bold text-white/85"
                 href={sectionLinks[0].href}
