@@ -154,7 +154,8 @@ export const createAdminRefund = async (input: {
       getStripeRequestOptions(
         "refund",
         String(input.order.id),
-        String(claim.id)
+        String(refundedCents),
+        String(requestedCents)
       )
     );
   } catch (error) {

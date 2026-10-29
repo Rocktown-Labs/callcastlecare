@@ -655,6 +655,36 @@ describe("POST /checkout/provider", () => {
     expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
   });
 
+  it("blocks resume when a completed payment is awaiting webhook finalization", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_paid_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockResolvedValue({
+            payment_status: "paid",
+            status: "complete",
+          }),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
   it("does not let a paid provider start a second verification charge", async () => {
     mocks.workersFindFirst.mockResolvedValue({
       id: 9,

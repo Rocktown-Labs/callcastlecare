@@ -668,8 +668,28 @@ const clearProviderVerificationSession = async (event: StripeWebhookEvent) => {
   if (metadata?.type !== "provider_express_onboarding") {
     return;
   }
+
+  const sessionId = getStringField(event.data.object.id);
+  const providerUserId = getStringField(metadata.providerUserId);
   const email = getStringField(metadata.email);
-  if (!email) {
+  if (!sessionId) {
+    return;
+  }
+
+  let target;
+  if (providerUserId) {
+    target = and(
+      eq(workers.userId, providerUserId),
+      eq(workers.providerVerificationSessionId, sessionId)
+    );
+  } else if (email) {
+    target = and(
+      eq(workers.email, email.toLowerCase()),
+      eq(workers.providerVerificationSessionId, sessionId)
+    );
+  }
+
+  if (!target) {
     return;
   }
 
@@ -679,7 +699,7 @@ const clearProviderVerificationSession = async (event: StripeWebhookEvent) => {
       providerVerificationSessionId: null,
       updatedAt: new Date(),
     })
-    .where(eq(workers.email, email.toLowerCase()));
+    .where(target);
 };
 
 const handleCheckoutSessionAsyncPaymentFailed = async (
@@ -2210,14 +2230,13 @@ export const checkoutRoutes = new Hono<AppEnv>()
       if (existingSession?.status === "open" && existingSession.url) {
         return c.json({ url: existingSession.url }, 200);
       }
-      if (
-        existingSession?.status === "complete" &&
-        existingSession.payment_status !== "paid"
-      ) {
+      if (existingSession?.status === "complete") {
         return c.json(
           {
             error:
-              "Verification payment is still processing. Try again after it settles.",
+              existingSession.payment_status === "paid"
+                ? "Verification payment was received and is being finalized."
+                : "Verification payment is still processing. Try again after it settles.",
           },
           409
         );
