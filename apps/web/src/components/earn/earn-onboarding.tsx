@@ -1062,12 +1062,18 @@ export default function EarnOnboarding() {
         }
       );
 
-      if (!response.ok) {
-        throw new Error("Failed to initiate Stripe Hosted Checkout session.");
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        url?: string;
+      } | null;
+
+      if (!(response.ok && payload?.url)) {
+        throw new Error(
+          payload?.error ?? "Failed to initiate Stripe Hosted Checkout session."
+        );
       }
 
-      const { url } = (await response.json()) as { url: string };
-      window.location.href = url;
+      window.location.href = payload.url;
     } catch (error) {
       setIsSubmitting(false);
       toast.error(

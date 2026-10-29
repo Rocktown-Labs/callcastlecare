@@ -25,6 +25,17 @@ vi.mock("@callcastlecare/db", () => ({
       payouts: { findFirst: mocks.dbQueryPayoutsFindFirst },
       workers: { findFirst: mocks.dbQueryWorkersFindFirst },
     },
+    // eslint-disable-next-line promise/prefer-await-to-callbacks, require-await -- Mirrors the Drizzle transaction callback shape.
+    transaction: async (callback: (tx: unknown) => unknown) =>
+      // eslint-disable-next-line promise/prefer-await-to-callbacks -- Drizzle transaction contract.
+      callback({
+        insert: mocks.dbInsert,
+        query: {
+          payouts: { findFirst: mocks.dbQueryPayoutsFindFirst },
+          workers: { findFirst: mocks.dbQueryWorkersFindFirst },
+        },
+        update: mocks.dbUpdate,
+      }),
     update: mocks.dbUpdate,
   },
   eq: vi.fn(),

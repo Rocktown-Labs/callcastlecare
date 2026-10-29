@@ -16,6 +16,7 @@ import {
 } from "@callcastlecare/auth/email";
 import { and, db, eq, gt, inArray, lt, sql } from "@callcastlecare/db";
 import {
+  account as authAccount,
   addresses,
   checkoutDrafts,
   checkoutItems,
@@ -35,6 +36,7 @@ import {
 } from "@callcastlecare/db/schema/index";
 import { renderProviderApplicationReceivedEmail } from "@callcastlecare/email";
 import { env } from "@callcastlecare/env/server";
+import { verifyPassword } from "better-auth/crypto";
 import { Hono } from "hono";
 import type { Context as HonoContext } from "hono";
 import { z } from "zod";
@@ -417,6 +419,20 @@ const getProviderUserByEmail = (email: string) =>
   db.query.user.findFirst({
     where: eq(authUsers.email, email.trim().toLowerCase()),
   });
+
+const providerPasswordMatches = async (userId: string, password: string) => {
+  const credential = await db.query.account.findFirst({
+    where: and(
+      eq(authAccount.userId, userId),
+      eq(authAccount.providerId, "credential")
+    ),
+  });
+  if (!credential?.password) {
+    return false;
+  }
+
+  return verifyPassword({ hash: credential.password, password });
+};
 
 const createProviderUser = async (input: {
   email: string;
@@ -2056,27 +2072,14 @@ export const checkoutRoutes = new Hono<AppEnv>()
 
     const { email, firstName, lastName, password, plan } = parsed.data;
     const existingUser = await getProviderUserByEmail(email);
-    if (existingUser) {
-      return c.json(
-        {
-          error:
-            "An account with this email already exists. Sign in to continue provider onboarding.",
-        },
-        409
-      );
-    }
-
     let providerUser;
-    try {
-      providerUser = await createProviderUser({
-        email,
-        firstName,
-        lastName,
-        password,
-      });
-    } catch (error) {
-      const racedUser = await getProviderUserByEmail(email);
-      if (racedUser) {
+    let createdProviderUser = false;
+
+    if (existingUser) {
+      // Only allow an unverified account to resume its own abandoned checkout.
+      // Verified accounts must sign in, and a wrong password cannot attach
+      // provider onboarding to someone else's identity.
+      if (existingUser.emailVerified) {
         return c.json(
           {
             error:
@@ -2085,27 +2088,75 @@ export const checkoutRoutes = new Hono<AppEnv>()
           409
         );
       }
-      throw error;
+
+      const passwordMatches = await providerPasswordMatches(
+        existingUser.id,
+        password
+      );
+      if (!passwordMatches) {
+        return c.json(
+          {
+            error:
+              "An account with this email already exists. Sign in to continue provider onboarding.",
+          },
+          409
+        );
+      }
+      providerUser = existingUser;
+    } else {
+      try {
+        providerUser = await createProviderUser({
+          email,
+          firstName,
+          lastName,
+          password,
+        });
+        createdProviderUser = true;
+      } catch (error) {
+        const racedUser = await getProviderUserByEmail(email);
+        if (racedUser) {
+          return c.json(
+            {
+              error:
+                "An account with this email already exists. Sign in to continue provider onboarding.",
+            },
+            409
+          );
+        }
+        throw error;
+      }
     }
+
     const origin = getCheckoutOrigin(c);
     const successUrl = `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}&type=provider&plan=${encodeURIComponent(plan)}`;
     const cancelUrl = `${origin}/earn#apply?checkout=cancelled`;
 
-    const stripeCheckoutSession = await createStripeCheckoutSession({
-      amountDueCents: 5000,
-      cancelUrl,
-      checkoutSessionId: Date.now(),
-      customerEmail: email,
-      metadata: {
-        email,
-        firstName,
-        lastName,
-        plan,
-        providerUserId: providerUser.id,
-        type: "provider_express_onboarding",
-      },
-      successUrl,
-    });
+    let stripeCheckoutSession;
+    try {
+      stripeCheckoutSession = await createStripeCheckoutSession({
+        amountDueCents: 5000,
+        cancelUrl,
+        checkoutSessionId: Date.now(),
+        customerEmail: email,
+        metadata: {
+          email,
+          firstName,
+          lastName,
+          plan,
+          providerUserId: providerUser.id,
+          type: "provider_express_onboarding",
+        },
+        successUrl,
+      });
+    } catch (error) {
+      // Do not leave a brand-new account behind when Stripe cannot start the
+      // checkout. Pre-existing unverified accounts are intentionally kept so
+      // the applicant can retry.
+      if (createdProviderUser) {
+        await db.delete(authUsers).where(eq(authUsers.id, providerUser.id));
+      }
+      throw error;
+    }
 
     return c.json({ url: stripeCheckoutSession.url }, 200);
   })

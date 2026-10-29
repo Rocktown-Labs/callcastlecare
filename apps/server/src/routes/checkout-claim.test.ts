@@ -7,6 +7,7 @@ import type { AppEnv } from "../types";
 import { checkoutRoutes } from "./checkout";
 
 const mocks = vi.hoisted(() => ({
+  accountFindFirst: vi.fn(),
   checkoutItemsFindMany: vi.fn(),
   checkoutSessionFindFirst: vi.fn(),
   createStripeCheckoutSession: vi.fn(),
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   sendAuthOtpEmail: vi.fn(),
   signUpEmail: vi.fn(),
   userFindFirst: vi.fn(),
+  verifyPassword: vi.fn(),
 }));
 
 vi.mock("@callcastlecare/db", () => ({
@@ -36,6 +38,7 @@ vi.mock("@callcastlecare/db", () => ({
     execute: vi.fn(),
     insert: vi.fn(),
     query: {
+      account: { findFirst: mocks.accountFindFirst },
       addresses: { findFirst: mocks.dbAddressFindFirst },
       checkoutItems: { findMany: mocks.checkoutItemsFindMany },
       checkoutSessions: { findFirst: mocks.checkoutSessionFindFirst },
@@ -54,6 +57,7 @@ vi.mock("@callcastlecare/db", () => ({
 }));
 
 vi.mock("@callcastlecare/db/schema/index", () => ({
+  account: { providerId: "providerId", userId: "userId" },
   addresses: { id: "id" },
   checkoutDrafts: { id: "id" },
   checkoutItems: { checkoutSessionId: "checkoutSessionId" },
@@ -79,6 +83,10 @@ vi.mock("@callcastlecare/auth", () => ({
       signUpEmail: mocks.signUpEmail,
     },
   },
+}));
+
+vi.mock("better-auth/crypto", () => ({
+  verifyPassword: mocks.verifyPassword,
 }));
 
 vi.mock("@callcastlecare/auth/email", async (importOriginal) => {
@@ -526,6 +534,7 @@ describe("POST /checkout/provider", () => {
   it("rejects an existing email instead of attaching provider onboarding", async () => {
     mocks.userFindFirst.mockResolvedValue({
       email: "provider@example.com",
+      emailVerified: true,
       id: "user_existing",
     });
 
@@ -535,6 +544,62 @@ describe("POST /checkout/provider", () => {
         firstName: "Jamie",
         lastName: "Provider",
         password: "chosen-password",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(409);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+    expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("lets an unverified account resume its own abandoned checkout", async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      emailVerified: false,
+      id: "user_existing",
+    });
+    mocks.accountFindFirst.mockResolvedValue({
+      password: "hashed-password",
+    });
+    mocks.verifyPassword.mockResolvedValue(true);
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        password: "chosen-password",
+        plan: "pro",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.signUpEmail).not.toHaveBeenCalled();
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
+  });
+
+  it("rejects an unverified account with the wrong password", async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      email: "provider@example.com",
+      emailVerified: false,
+      id: "user_existing",
+    });
+    mocks.accountFindFirst.mockResolvedValue({
+      password: "hashed-password",
+    });
+    mocks.verifyPassword.mockResolvedValue(false);
+
+    const response = await buildApp().request("/checkout/provider", {
+      body: JSON.stringify({
+        email: "provider@example.com",
+        firstName: "Jamie",
+        lastName: "Provider",
+        password: "wrong-password",
         plan: "pro",
       }),
       headers: { "Content-Type": "application/json" },

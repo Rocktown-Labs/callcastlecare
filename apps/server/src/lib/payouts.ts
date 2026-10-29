@@ -1,4 +1,4 @@
-import { and, db, eq, isNull, lte } from "@callcastlecare/db";
+import { and, db, eq, isNull, lt, lte } from "@callcastlecare/db";
 import {
   earningsLedger,
   payouts,
@@ -10,6 +10,10 @@ import { env } from "@callcastlecare/env/server";
 import { releaseWorkerPayout } from "./integrations/stripe-connect";
 import { logger } from "./logger";
 
+const STALE_PAYOUT_CLAIM_MS = 15 * 60 * 1000;
+
+type InsertExecutor = Pick<typeof db, "insert">;
+
 const createWorkerEarnings = async (
   input: {
     dispatchBonusCents?: number;
@@ -17,9 +21,10 @@ const createWorkerEarnings = async (
     tipAmountCents: number;
     workerId: number;
   },
-  basePayCents: number
+  basePayCents: number,
+  executor: InsertExecutor = db
 ) => {
-  await db.insert(earningsLedger).values({
+  await executor.insert(earningsLedger).values({
     amountCents: basePayCents,
     earningType: "base_pay",
     orderId: input.orderId,
@@ -29,7 +34,7 @@ const createWorkerEarnings = async (
 
   const dispatchBonusCents = Math.max(0, input.dispatchBonusCents ?? 0);
   if (dispatchBonusCents > 0) {
-    await db.insert(earningsLedger).values({
+    await executor.insert(earningsLedger).values({
       amountCents: dispatchBonusCents,
       earningType: "adjustment",
       orderId: input.orderId,
@@ -39,7 +44,7 @@ const createWorkerEarnings = async (
   }
 
   if (input.tipAmountCents > 0) {
-    await db.insert(earningsLedger).values({
+    await executor.insert(earningsLedger).values({
       amountCents: input.tipAmountCents,
       earningType: "tip",
       orderId: input.orderId,
@@ -47,25 +52,6 @@ const createWorkerEarnings = async (
       workerId: input.workerId,
     });
   }
-};
-
-const claimPayoutRecord = async (input: {
-  amountCents: number;
-  orderId: number;
-  workerId: number;
-}) => {
-  const [claimed] = await db
-    .insert(payouts)
-    .values({
-      amountCents: input.amountCents,
-      orderId: input.orderId,
-      status: "processing",
-      workerId: input.workerId,
-    })
-    .onConflictDoNothing({ target: payouts.orderId })
-    .returning();
-
-  return claimed ?? null;
 };
 
 const settlePayoutRecord = async (claimed: typeof payouts.$inferSelect) => {
@@ -104,7 +90,9 @@ const settlePayoutRecord = async (claimed: typeof payouts.$inferSelect) => {
       failureReason: transfer.success ? null : "stripe_transfer_failed",
       paidAt: transfer.success ? new Date() : null,
       providerPayoutId: transfer.providerPayoutId,
-      status: transfer.success ? "paid" : "failed",
+      // Transient Stripe/network failures stay pending so the next release
+      // attempt can retry them; Stripe idempotency keeps the retry safe.
+      status: transfer.success ? "paid" : "pending",
     })
     .where(and(eq(payouts.id, claimed.id), eq(payouts.status, "processing")))
     .returning();
@@ -127,28 +115,32 @@ export const createCompletionPayoutRecords = async (input: {
   const payoutAmountCents =
     basePayCents + dispatchBonusCents + Math.max(0, input.tipAmountCents);
 
-  const claimed = await claimPayoutRecord({
-    amountCents: payoutAmountCents,
-    orderId: input.orderId,
-    workerId: input.workerId,
+  const claimed = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(payouts)
+      .values({
+        amountCents: payoutAmountCents,
+        orderId: input.orderId,
+        status: "processing",
+        workerId: input.workerId,
+      })
+      .onConflictDoNothing({ target: payouts.orderId })
+      .returning();
+
+    if (!row) {
+      return null;
+    }
+
+    // The claim and its earnings ledger rows commit together, so a crash
+    // cannot leave a processing payout without matching earnings.
+    await createWorkerEarnings(input, basePayCents, tx);
+    return row;
   });
+
   if (!claimed) {
     return db.query.payouts.findFirst({
       where: eq(payouts.orderId, input.orderId),
     });
-  }
-
-  try {
-    await createWorkerEarnings(input, basePayCents);
-  } catch (error) {
-    await db
-      .update(payouts)
-      .set({
-        failureReason: "earnings_ledger_write_failed",
-        status: "failed",
-      })
-      .where(and(eq(payouts.id, claimed.id), eq(payouts.status, "processing")));
-    throw error;
   }
 
   return settlePayoutRecord(claimed);
@@ -172,6 +164,22 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
   ) {
     return [] as number[];
   }
+
+  // A crashed process can leave a claim in processing. Return stale claims to
+  // pending; Stripe's per-order idempotency key keeps a retry safe.
+  await db
+    .update(payouts)
+    .set({
+      failureReason: "stale_processing_claim",
+      status: "pending",
+    })
+    .where(
+      and(
+        eq(payouts.workerId, workerId),
+        eq(payouts.status, "processing"),
+        lt(payouts.createdAt, new Date(Date.now() - STALE_PAYOUT_CLAIM_MS))
+      )
+    );
 
   const pendingPayouts = await db.query.payouts.findMany({
     where: and(eq(payouts.workerId, workerId), eq(payouts.status, "pending")),
@@ -204,7 +212,7 @@ export const releasePendingWorkerPayouts = async (workerId: number) => {
           failureReason: transfer.success ? null : "stripe_transfer_failed",
           paidAt: transfer.success ? new Date() : null,
           providerPayoutId: transfer.providerPayoutId,
-          status: transfer.success ? "paid" : "failed",
+          status: transfer.success ? "paid" : "pending",
         })
         .where(
           and(eq(payouts.id, claimed.id), eq(payouts.status, "processing"))
@@ -242,38 +250,38 @@ export const releaseEligibleTipHolds = async (orderId?: number) => {
 
   await Promise.all(
     holds.map(async (hold) => {
-      const [claimed] = await db
-        .update(tipHolds)
-        .set({
-          releasedAt: new Date(),
-        })
-        .where(and(eq(tipHolds.id, hold.id), isNull(tipHolds.releasedAt)))
-        .returning();
-      if (!claimed) {
-        return;
-      }
+      const released = await db.transaction(async (tx) => {
+        const [claimed] = await tx
+          .update(tipHolds)
+          .set({
+            releasedAt: new Date(),
+          })
+          .where(and(eq(tipHolds.id, hold.id), isNull(tipHolds.releasedAt)))
+          .returning();
+        if (!claimed) {
+          return null;
+        }
 
-      try {
-        await db.insert(earningsLedger).values({
+        await tx.insert(earningsLedger).values({
           amountCents: claimed.amountCents,
           earningType: "tip",
           orderId: claimed.orderId,
           releaseAt: new Date(),
           workerId: claimed.workerId,
         });
-      } catch (error) {
-        await db
-          .update(tipHolds)
-          .set({ releasedAt: null })
-          .where(eq(tipHolds.id, claimed.id));
-        throw error;
+
+        return claimed;
+      });
+
+      if (!released) {
+        return;
       }
 
       logger.info(
         {
-          amountCents: claimed.amountCents,
-          holdId: claimed.id,
-          orderId: claimed.orderId,
+          amountCents: released.amountCents,
+          holdId: released.id,
+          orderId: released.orderId,
         },
         "tip_hold:released"
       );

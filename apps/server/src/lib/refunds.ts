@@ -1,4 +1,4 @@
-import { db, eq, sql } from "@callcastlecare/db";
+import { db, eq } from "@callcastlecare/db";
 import type { orders } from "@callcastlecare/db/schema/index";
 import { payouts, stripeRefunds } from "@callcastlecare/db/schema/index";
 
@@ -8,6 +8,9 @@ import {
 } from "./integrations/stripe-client";
 import { reverseWorkerTransfer } from "./integrations/stripe-connect";
 import { logger } from "./logger";
+
+const STALE_REFUND_CLAIM_MS = 10 * 60 * 1000;
+const getRefundClaimId = (orderId: number) => `claim:${orderId}`;
 
 export class RefundError extends Error {
   statusCode: 404 | 409 | 503;
@@ -62,80 +65,110 @@ export const createAdminRefund = async (input: {
     throw new RefundError("Stripe payments are not configured", 503);
   }
   const paymentIntentId = input.order.stripePaymentIntentId;
+  const requestedCents = input.amountCents ?? input.order.totalPriceCents;
+  if (requestedCents <= 0) {
+    throw new RefundError("Refund amount must be positive", 409);
+  }
 
-  // Serialize refunds for one order so two admins cannot both pass the
-  // remaining-balance check and over-refund the payment intent.
-  const { amountCents, createdRefund, stripeRefundId } = await db.transaction(
-    async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${input.order.id})`);
+  const claimId = getRefundClaimId(input.order.id);
+  const staleCutoff = new Date(Date.now() - STALE_REFUND_CLAIM_MS);
+  const existingRefunds = await db.query.stripeRefunds.findMany({
+    where: eq(stripeRefunds.orderId, input.order.id),
+  });
 
-      const existingRefunds = await tx.query.stripeRefunds.findMany({
-        where: eq(stripeRefunds.orderId, input.order.id),
-      });
-      const refundedCents = existingRefunds.reduce(
-        (total, refund) => total + refund.amountCents,
-        0
-      );
-      const requestedCents = input.amountCents ?? input.order.totalPriceCents;
-      if (
-        requestedCents <= 0 ||
-        refundedCents + requestedCents > input.order.totalPriceCents
-      ) {
-        throw new RefundError(
-          "Refund exceeds the remaining order balance",
-          409
-        );
-      }
-
-      const refund = await stripe.refunds.create(
-        {
-          amount: requestedCents,
-          metadata: {
-            castlecareOrderId: String(input.order.id),
-          },
-          payment_intent: paymentIntentId,
-          reason: "requested_by_customer",
-        },
-        getStripeRequestOptions(
-          "refund",
-          String(input.order.id),
-          String(requestedCents)
-        )
-      );
-      const [created] = await tx
-        .insert(stripeRefunds)
-        .values({
-          amountCents: requestedCents,
-          metadataJson: {
-            adminEmail: input.adminEmail,
-            stripeStatus: refund.status,
-          },
-          orderId: input.order.id,
-          reason: input.reason || null,
-          status: refund.status ?? "pending",
-          stripeRefundId: refund.id,
-          updatedAt: new Date(),
-        })
-        .onConflictDoNothing({ target: stripeRefunds.stripeRefundId })
-        .returning();
-
-      return {
-        amountCents: requestedCents,
-        createdRefund: created ?? null,
-        stripeRefundId: refund.id,
-      };
-    }
+  const staleClaim = existingRefunds.find(
+    (refund) =>
+      refund.stripeRefundId === claimId && refund.updatedAt <= staleCutoff
   );
+  if (staleClaim) {
+    await db.delete(stripeRefunds).where(eq(stripeRefunds.id, staleClaim.id));
+  }
 
-  await reversePayoutIfNeeded({ amountCents, orderId: input.order.id });
+  const activeRefunds = existingRefunds.filter(
+    (refund) => refund.id !== staleClaim?.id
+  );
+  const refundedCents = activeRefunds.reduce(
+    (total, refund) => total + refund.amountCents,
+    0
+  );
+  if (refundedCents + requestedCents > input.order.totalPriceCents) {
+    throw new RefundError("Refund exceeds the remaining order balance", 409);
+  }
+
+  // A deterministic claim id makes the unique stripeRefundId index a
+  // single-writer gate for this order without holding a DB transaction open
+  // across the Stripe network call.
+  const [claim] = await db
+    .insert(stripeRefunds)
+    .values({
+      amountCents: requestedCents,
+      metadataJson: {
+        adminEmail: input.adminEmail,
+        claim: true,
+      },
+      orderId: input.order.id,
+      reason: input.reason || null,
+      status: "pending",
+      stripeRefundId: claimId,
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing({ target: stripeRefunds.stripeRefundId })
+    .returning();
+  if (!claim) {
+    throw new RefundError(
+      "A refund is already in progress for this order",
+      409
+    );
+  }
+
+  let refund;
+  try {
+    refund = await stripe.refunds.create(
+      {
+        amount: requestedCents,
+        metadata: {
+          castlecareOrderId: String(input.order.id),
+        },
+        payment_intent: paymentIntentId,
+        reason: "requested_by_customer",
+      },
+      getStripeRequestOptions(
+        "refund",
+        String(input.order.id),
+        String(requestedCents)
+      )
+    );
+  } catch (error) {
+    await db.delete(stripeRefunds).where(eq(stripeRefunds.id, claim.id));
+    throw error;
+  }
+
+  const [createdRefund] = await db
+    .update(stripeRefunds)
+    .set({
+      metadataJson: {
+        adminEmail: input.adminEmail,
+        stripeStatus: refund.status,
+      },
+      status: refund.status ?? "pending",
+      stripeRefundId: refund.id,
+      updatedAt: new Date(),
+    })
+    .where(eq(stripeRefunds.id, claim.id))
+    .returning();
+
+  await reversePayoutIfNeeded({
+    amountCents: requestedCents,
+    orderId: input.order.id,
+  });
   logger.info(
     {
       adminEmail: input.adminEmail,
-      amountCents,
+      amountCents: requestedCents,
       orderId: input.order.id,
-      stripeRefundId,
+      stripeRefundId: refund.id,
     },
     "admin:refund:created"
   );
-  return createdRefund;
+  return createdRefund ?? null;
 };
