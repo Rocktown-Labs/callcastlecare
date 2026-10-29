@@ -83,17 +83,21 @@ const parseTrustedOrigins = (value: string) =>
     .map((origin) => origin.trim())
     .filter(Boolean);
 
-const isCrossSiteDeployment = (value: string) =>
-  parseTrustedOrigins(value).some((origin) => {
-    try {
-      const { hostname } = new URL(origin);
-      return (
-        hostname.endsWith(".workers.dev") || hostname.endsWith(".vercel.app")
-      );
-    } catch {
-      return false;
-    }
-  });
+const isCrossSiteDeployment = (value: string) => {
+  const [primaryOrigin] = parseTrustedOrigins(value);
+  if (!primaryOrigin) {
+    return false;
+  }
+
+  try {
+    const { hostname } = new URL(primaryOrigin);
+    return (
+      hostname.endsWith(".workers.dev") || hostname.endsWith(".vercel.app")
+    );
+  } catch {
+    return false;
+  }
+};
 
 const createAuth = (config: AuthConfig, database: Database) => {
   const stripePlugin = createStripePlugin(config);

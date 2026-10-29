@@ -29,6 +29,7 @@ The script verifies each credential against the old default, clears matching pas
 ## Deployment leads
 
 - **Unsigned Stripe webhooks outside production** — mock mode is now limited to exact `development`/`test`. Confirm every deployed API host sets `NODE_ENV=production` and non-placeholder Stripe/webhook secrets.
+- **Radar geocoding is required for saved-address checkout** — set `RADAR_API_KEY` in production; without it, verified addresses have null coordinates and checkout returns 422.
 - **`@tanstack/react-start` version floor** — the local tree resolves `1.168.32`; Vercel blocks versions below `1.168.60`. Track with PR #33.
 
 ## Residual hardening

@@ -63,11 +63,21 @@ export const isOriginAllowed = (input: {
   return false;
 };
 
+const webhookPrefixes = [
+  "/webhooks/",
+  "/api/v1/webhooks/",
+  "/v1/webhooks/",
+  "/api/webhooks/",
+] as const;
+
+const webhookExactPaths = new Set([
+  "/webhook/stripe",
+  "/checkout/webhook/stripe",
+]);
+
 const isWebhookPath = (path: string) =>
-  path.includes("/webhooks/") ||
-  path.includes("/webhook/") ||
-  path.startsWith("/webhooks") ||
-  path.endsWith("/webhook");
+  webhookExactPaths.has(path) ||
+  webhookPrefixes.some((prefix) => path.startsWith(prefix));
 
 const isAuthPath = (path: string) =>
   path.startsWith("/api/auth") || path.startsWith("/auth");
