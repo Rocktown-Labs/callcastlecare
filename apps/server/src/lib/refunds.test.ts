@@ -142,7 +142,11 @@ describe("createAdminRefund", () => {
       set: () => ({
         where: () => ({
           returning: () => {
-            throw Object.assign(new Error("duplicate key"), { code: "23505" });
+            throw Object.assign(new Error("duplicate key"), {
+              cause: Object.assign(new Error("driver error"), {
+                code: "23505",
+              }),
+            });
           },
         }),
       }),

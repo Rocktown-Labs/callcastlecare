@@ -16,6 +16,16 @@ A source-and-local security pass reviewed the web app, API, auth, database acces
 | Medium | Client-supplied address coordinates/state were trusted | Server-side Radar geocoding for coordinates and state/zip |
 | Medium | Non-atomic payout/refund/tip transitions | Durable claims before Stripe calls; transient failures retry; refunds use a claim row |
 
+## Required one-time cleanup
+
+Accounts created by the old provider checkout may still have the known `TempPassword123!` credential. After deploying, run:
+
+```bash
+bun run db:reset-legacy-provider-passwords
+```
+
+The script verifies each credential against the old default, clears matching passwords, and forces those accounts through password reset. It is idempotent.
+
 ## Deployment leads
 
 - **Unsigned Stripe webhooks outside production** — mock mode is now limited to exact `development`/`test`. Confirm every deployed API host sets `NODE_ENV=production` and non-placeholder Stripe/webhook secrets.

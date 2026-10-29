@@ -12,11 +12,24 @@ import { logger } from "./logger";
 const STALE_REFUND_CLAIM_MS = 10 * 60 * 1000;
 const getRefundClaimId = (orderId: number) => `claim:${orderId}`;
 
-const isUniqueViolation = (error: unknown) =>
-  typeof error === "object" &&
-  error !== null &&
-  "code" in error &&
-  (error as { code?: unknown }).code === "23505";
+const getErrorCode = (error: unknown): string | undefined => {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth += 1) {
+    if (typeof current === "object" && current !== null && "code" in current) {
+      const { code } = current as { code?: unknown };
+      if (typeof code === "string") {
+        return code;
+      }
+    }
+    current =
+      typeof current === "object" && current !== null && "cause" in current
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+  return undefined;
+};
+
+const isUniqueViolation = (error: unknown) => getErrorCode(error) === "23505";
 
 export class RefundError extends Error {
   statusCode: 404 | 409 | 503;
@@ -141,7 +154,7 @@ export const createAdminRefund = async (input: {
       getStripeRequestOptions(
         "refund",
         String(input.order.id),
-        String(requestedCents)
+        String(claim.id)
       )
     );
   } catch (error) {
