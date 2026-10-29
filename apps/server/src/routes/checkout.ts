@@ -84,6 +84,7 @@ import {
   finalizeCheckoutPayment,
   formatAppointmentWindow,
 } from "../lib/orders";
+import { getPrimaryOrigin } from "../lib/origin";
 import { releasePendingWorkerPayouts } from "../lib/payouts";
 import {
   materializeSubscriptionPeriodOrders,
@@ -186,8 +187,9 @@ const getScheduledCheckoutSlots = (
 
 const getCheckoutOrigin = (c: HonoContext) => {
   const requestOrigin = new URL(c.req.url).origin;
-  if (env.CORS_ORIGIN && env.CORS_ORIGIN !== "*") {
-    return env.CORS_ORIGIN;
+  const configured = getPrimaryOrigin(env.CORS_ORIGIN);
+  if (configured && configured !== "*") {
+    return configured;
   }
   return requestOrigin;
 };

@@ -26,6 +26,9 @@ export const parseAllowedOrigins = (value: string | undefined): string[] =>
     .map((origin) => origin.trim())
     .filter(Boolean);
 
+export const getPrimaryOrigin = (value: string | undefined) =>
+  parseAllowedOrigins(value)[0] ?? value;
+
 /**
  * Credentialed CORS must never reflect arbitrary origins. Accept the
  * configured origin list exactly, plus localhost in non-production so local
@@ -51,7 +54,7 @@ export const isOriginAllowed = (input: {
   }
 
   if (
-    input.nodeEnv !== "production" &&
+    (input.nodeEnv === "development" || input.nodeEnv === "test") &&
     LOCAL_ORIGIN_PATTERN.test(input.origin)
   ) {
     return true;

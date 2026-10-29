@@ -52,6 +52,13 @@ describe("origin allowlist", () => {
         origin: "http://localhost:3001",
       })
     ).toBe(false);
+    expect(
+      isOriginAllowed({
+        configured: undefined,
+        nodeEnv: undefined,
+        origin: "http://localhost:3001",
+      })
+    ).toBe(false);
   });
 
   it("parses comma-separated configured origins", () => {

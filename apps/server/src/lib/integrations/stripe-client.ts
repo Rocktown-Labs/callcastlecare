@@ -1,6 +1,8 @@
 import { env } from "@callcastlecare/env/server";
 import Stripe from "stripe";
 
+import { getPrimaryOrigin } from "../origin";
+
 export type StripeMode = "live" | "test";
 export type StripeWebhookEndpointKind = "billing" | "commerce" | "connect";
 
@@ -65,7 +67,8 @@ export const getStripeWebhookSecret = (
 };
 
 export const getStripeWebhookBaseUrl = () => {
-  const configured = env.STRIPE_WEBHOOK_BASE_URL ?? env.CORS_ORIGIN;
+  const configured =
+    env.STRIPE_WEBHOOK_BASE_URL ?? getPrimaryOrigin(env.CORS_ORIGIN);
   if (!configured) {
     return null;
   }

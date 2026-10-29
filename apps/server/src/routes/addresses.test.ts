@@ -70,7 +70,7 @@ describe("POST /addresses coordinate trust", () => {
         formattedAddress: "123 Castle Way, Little Rock, AR 72201, US",
         latitude: 0,
         longitude: 0,
-        state: "AR",
+        state: "TX",
         street: "123 Castle Way",
         zip: "72201",
       }),
@@ -87,6 +87,7 @@ describe("POST /addresses coordinate trust", () => {
         latitude: 34.7465,
         longitude: -92.2896,
         radarGeocodeJson: { source: "radar" },
+        state: "AR",
       })
     );
   });

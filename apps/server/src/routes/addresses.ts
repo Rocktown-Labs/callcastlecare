@@ -92,19 +92,23 @@ export const addressesRoutes = new Hono<AppEnv>()
         });
       const verified = await verifyAddressWithRadar(formattedAddress);
       const address = await createAddressRecord({
-        city: payload.city,
+        city: verified.city || payload.city,
         country,
         customerId: customer.id,
-        formattedAddress,
+        formattedAddress: verified.verdict.isComplete
+          ? verified.formattedAddress
+          : formattedAddress,
         instructions: payload.instructions ?? null,
         isDefault: payload.isDefault,
         label: payload.label,
         latitude: verified.latitude,
         longitude: verified.longitude,
         radarGeocodeJson: verified.raw,
-        state: payload.state,
-        street: payload.street,
-        zip: payload.zip,
+        // Service-area eligibility and travel pricing read state/zip, so use
+        // the geocoder's canonical values rather than client-provided ones.
+        state: verified.state || payload.state,
+        street: verified.street || payload.street,
+        zip: verified.zip || payload.zip,
       });
 
       return c.json({ address }, 200);
@@ -119,19 +123,21 @@ export const addressesRoutes = new Hono<AppEnv>()
       const formattedAddress = payload.formattedAddress ?? payload.address;
       const verified = await verifyAddressWithRadar(formattedAddress);
       const address = await createAddressRecord({
-        city,
+        city: verified.city || city,
         country: payload.country ?? "US",
         customerId: customer.id,
-        formattedAddress,
+        formattedAddress: verified.verdict.isComplete
+          ? verified.formattedAddress
+          : formattedAddress,
         instructions: payload.instructions ?? null,
         isDefault: payload.isDefault,
         label: payload.label,
         latitude: verified.latitude,
         longitude: verified.longitude,
         radarGeocodeJson: verified.raw,
-        state,
-        street,
-        zip,
+        state: verified.state || state,
+        street: verified.street || street,
+        zip: verified.zip || zip,
       });
 
       return c.json({ address }, 200);

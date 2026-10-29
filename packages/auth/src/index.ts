@@ -77,16 +77,23 @@ const authAllowedHosts = [
   "*.workers.dev",
 ];
 
-const isCrossSiteDeployment = (origin: string) => {
-  try {
-    const { hostname } = new URL(origin);
-    return (
-      hostname.endsWith(".workers.dev") || hostname.endsWith(".vercel.app")
-    );
-  } catch {
-    return false;
-  }
-};
+const parseTrustedOrigins = (value: string) =>
+  value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const isCrossSiteDeployment = (value: string) =>
+  parseTrustedOrigins(value).some((origin) => {
+    try {
+      const { hostname } = new URL(origin);
+      return (
+        hostname.endsWith(".workers.dev") || hostname.endsWith(".vercel.app")
+      );
+    } catch {
+      return false;
+    }
+  });
 
 const createAuth = (config: AuthConfig, database: Database) => {
   const stripePlugin = createStripePlugin(config);
@@ -201,7 +208,7 @@ const createAuth = (config: AuthConfig, database: Database) => {
           }
         : undefined,
     trustedOrigins: [
-      config.CORS_ORIGIN,
+      ...parseTrustedOrigins(config.CORS_ORIGIN),
       "https://callcastlecare.com",
       "https://www.callcastlecare.com",
       "callcastlecare-driver://",
