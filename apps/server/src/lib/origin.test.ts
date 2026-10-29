@@ -71,7 +71,8 @@ const buildApp = () =>
     .use("*", originGuard())
     .post("/orders/1/cancel", (c) => c.json({ ok: true }))
     .get("/health", (c) => c.json({ ok: true }))
-    .post("/webhooks/stripe", (c) => c.json({ ok: true }));
+    .post("/webhooks/stripe", (c) => c.json({ ok: true }))
+    .post("/checkout/webhook/stripe", (c) => c.json({ ok: true }));
 
 const env = {
   CORS_ORIGIN: "https://callcastlecare.com",
@@ -120,8 +121,17 @@ describe("originGuard", () => {
       },
       env
     );
+    const checkoutWebhookResponse = await buildApp().request(
+      "/checkout/webhook/stripe",
+      {
+        headers: { origin: "https://evil.workers.dev" },
+        method: "POST",
+      },
+      env
+    );
 
     expect(getResponse.status).toBe(200);
     expect(webhookResponse.status).toBe(200);
+    expect(checkoutWebhookResponse.status).toBe(200);
   });
 });
