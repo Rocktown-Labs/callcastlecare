@@ -2235,26 +2235,41 @@ export const checkoutRoutes = new Hono<AppEnv>()
           worker.providerVerificationSessionId
         );
       } catch (error) {
-        logger.warn(
-          {
-            err: error,
-            sessionId: worker.providerVerificationSessionId,
-            userId: userResult.user.id,
-          },
-          "provider:verification_session_lookup_failed"
-        );
-        // Do not mint a second payable session when we cannot prove the first
-        // one is closed.
-        return c.json(
-          { error: "Provider verification status is temporarily unavailable." },
-          503
-        );
+        const isMissingSession =
+          typeof error === "object" &&
+          error !== null &&
+          (("code" in error &&
+            (error as { code?: unknown }).code === "resource_missing") ||
+            ("statusCode" in error &&
+              (error as { statusCode?: unknown }).statusCode === 404));
+        if (!isMissingSession) {
+          logger.warn(
+            {
+              err: error,
+              sessionId: worker.providerVerificationSessionId,
+              userId: userResult.user.id,
+            },
+            "provider:verification_session_lookup_failed"
+          );
+          // Do not mint a second payable session when we cannot prove the
+          // first one is closed.
+          return c.json(
+            {
+              error: "Provider verification status is temporarily unavailable.",
+            },
+            503
+          );
+        }
+
+        // The stored session is gone (deleted or from another Stripe mode).
+        // Fall through and create a fresh one; the upsert below replaces the
+        // stale id.
       }
 
-      if (existingSession.status === "open" && existingSession.url) {
+      if (existingSession?.status === "open" && existingSession.url) {
         return c.json({ url: existingSession.url }, 200);
       }
-      if (existingSession.status === "complete") {
+      if (existingSession?.status === "complete") {
         return c.json(
           {
             error:

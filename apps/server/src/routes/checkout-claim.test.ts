@@ -685,6 +685,38 @@ describe("POST /checkout/provider", () => {
     expect(mocks.createStripeCheckoutSession).not.toHaveBeenCalled();
   });
 
+  it("mints a fresh session when the stored Stripe session is gone", async () => {
+    mocks.workersFindFirst.mockResolvedValue({
+      id: 9,
+      providerVerificationSessionId: "cs_missing_1",
+      userId: "user_provider_1",
+    });
+    mocks.getStripeClient.mockReturnValue({
+      checkout: {
+        sessions: {
+          retrieve: vi.fn().mockRejectedValue(
+            Object.assign(new Error("No such checkout session"), {
+              code: "resource_missing",
+              statusCode: 404,
+            })
+          ),
+        },
+      },
+    });
+
+    const response = await buildApp("user_provider_1").request(
+      "/checkout/provider/resume",
+      {
+        body: JSON.stringify({ plan: "pro" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.createStripeCheckoutSession).toHaveBeenCalled();
+  });
+
   it("does not let a paid provider start a second verification charge", async () => {
     mocks.workersFindFirst.mockResolvedValue({
       id: 9,
