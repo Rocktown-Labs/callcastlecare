@@ -109,18 +109,25 @@ Both respond successfully:
 When redeploying, make sure these are exported or present in the environment:
 
 - `BETTER_AUTH_SECRET`
-- `BETTER_AUTH_URL`
-- `CORS_ORIGIN`
 - `DATABASE_URL`
-- `ADMIN_EMAIL` (has a default, but can be explicit)
 - `RESEND_API_KEY`
 - `RESEND_WEBHOOK_SECRET`
 - `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
-- `STRIPE_WEBHOOK_PUBLIC_URL`
+- `STRIPE_BILLING_WEBHOOK_SECRET`
+- `STRIPE_COMMERCE_WEBHOOK_SECRET`
+- `STRIPE_CONNECT_WEBHOOK_SECRET`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
-- `STRIPE_PLATFORM_ACCOUNT`
+- `ADMIN_EMAIL` (has a default, but can be explicit)
+
+These are derived or defaulted by `packages/infra/alchemy.run.ts` and only need overriding when the hostnames change:
+
+- `BETTER_AUTH_URL` — the API Worker URL (`https://api.callcastlecare.com`)
+- `CORS_ORIGIN` — the web origin (`https://callcastlecare.com`)
+- `STRIPE_WEBHOOK_BASE_URL` — the API origin (`https://api.callcastlecare.com`)
+- `STRIPE_WEBHOOK_PUBLIC_URL` — legacy alias, defaulted to the API origin
+
+External provider dashboards do not follow the Worker URLs. After a domain cutover, update the Google OAuth redirect URI, re-run Stripe catalog sync and install the new webhook secrets, and repoint the Resend webhook. See `docs/stripe-operations.md`.
 
 ## Verification commands
 
@@ -135,11 +142,11 @@ bun run test
 bun run dev
 
 # Deploy infrastructure
-bun run deploy
+bun run infra:deploy
 ```
 
 ## Notes
 
-- `localhost` and `*.workers.dev` origins are currently accepted for CORS until the custom domain is connected.
+- Production CORS accepts only `CORS_ORIGIN` (defaults to `https://callcastlecare.com`). Localhost origins are accepted only outside production; `*.workers.dev` origins are no longer reflected automatically, so preview hosts must be added to `CORS_ORIGIN` explicitly.
 - Currency continues to be stored and transmitted as integer cents across DB, API, Stripe, and UI calculations.
 - Local development now uses the same code paths as the deployed Worker; there are no Vercel-specific runtime branches left.
