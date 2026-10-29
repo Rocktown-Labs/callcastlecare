@@ -2222,15 +2222,39 @@ export const checkoutRoutes = new Hono<AppEnv>()
 
     if (worker?.providerVerificationSessionId) {
       const stripe = getStripeClient();
-      const existingSession = stripe
-        ? await stripe.checkout.sessions
-            .retrieve(worker.providerVerificationSessionId)
-            .catch(() => null)
-        : null;
-      if (existingSession?.status === "open" && existingSession.url) {
+      if (!stripe) {
+        return c.json(
+          { error: "Provider verification is temporarily unavailable." },
+          503
+        );
+      }
+
+      let existingSession;
+      try {
+        existingSession = await stripe.checkout.sessions.retrieve(
+          worker.providerVerificationSessionId
+        );
+      } catch (error) {
+        logger.warn(
+          {
+            err: error,
+            sessionId: worker.providerVerificationSessionId,
+            userId: userResult.user.id,
+          },
+          "provider:verification_session_lookup_failed"
+        );
+        // Do not mint a second payable session when we cannot prove the first
+        // one is closed.
+        return c.json(
+          { error: "Provider verification status is temporarily unavailable." },
+          503
+        );
+      }
+
+      if (existingSession.status === "open" && existingSession.url) {
         return c.json({ url: existingSession.url }, 200);
       }
-      if (existingSession?.status === "complete") {
+      if (existingSession.status === "complete") {
         return c.json(
           {
             error:
