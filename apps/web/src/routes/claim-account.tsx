@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 
 import { EmailOtpSignIn } from "@/components/auth/email-otp-sign-in";
+import { getServerUrl } from "@/lib/server-url";
 
 const searchSchema = z.object({
   accessToken: z.string().min(1).optional(),
@@ -30,10 +31,12 @@ const RouteComponent = () => {
 
     void (async () => {
       try {
-        const response = await fetch(
-          `/api/v1/checkout/access-token/resolve?token=${encodeURIComponent(searchAccessToken)}`,
-          { signal: controller.signal }
+        const url = new URL(
+          "/api/v1/checkout/access-token/resolve",
+          getServerUrl()
         );
+        url.searchParams.set("token", searchAccessToken);
+        const response = await fetch(url, { signal: controller.signal });
         if (!response.ok) {
           throw new Error("Checkout email could not be resolved");
         }

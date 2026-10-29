@@ -67,6 +67,7 @@ const createStripePlugin = (config: AuthConfig) => {
 const authAllowedHosts = [
   "callcastlecare.com",
   "www.callcastlecare.com",
+  "api.callcastlecare.com",
   "localhost:3000",
   "localhost:3001",
   "localhost:5173",
@@ -187,8 +188,12 @@ const createAuth = (config: AuthConfig, database: Database) => {
         : undefined,
     trustedOrigins: [
       config.CORS_ORIGIN,
+      "https://callcastlecare.com",
+      "https://www.callcastlecare.com",
       "callcastlecare-driver://",
       "exp://",
+      "http://localhost:3001",
+      "http://localhost:5173",
       "http://localhost:8081",
     ],
   });

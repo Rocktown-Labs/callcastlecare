@@ -15,6 +15,12 @@ const mediaBucket = Cloudflare.R2.Bucket("media", {
 
 const jobQueue = Cloudflare.Queues.Queue("jobs");
 
+const WEB_DOMAIN = "callcastlecare.com";
+const WEB_WWW_DOMAIN = `www.${WEB_DOMAIN}`;
+const API_DOMAIN = `api.${WEB_DOMAIN}`;
+const WEB_ORIGIN = `https://${WEB_DOMAIN}`;
+const API_ORIGIN = `https://${API_DOMAIN}`;
+
 export const server = Cloudflare.Worker("castlecare-server", {
   compatibility: {
     flags: ["nodejs_compat"],
@@ -22,13 +28,16 @@ export const server = Cloudflare.Worker("castlecare-server", {
   dev: {
     port: 3000,
   },
+  domain: API_DOMAIN,
   env: {
     ADMIN_EMAIL: Config.String("ADMIN_EMAIL").pipe(
       Config.withDefault("cg@rocktownlabs.com")
     ),
     BETTER_AUTH_SECRET: Config.Redacted("BETTER_AUTH_SECRET"),
     BETTER_AUTH_URL: Cloudflare.Worker.URL,
-    CORS_ORIGIN: Config.String("CORS_ORIGIN"),
+    CORS_ORIGIN: Config.String("CORS_ORIGIN").pipe(
+      Config.withDefault(WEB_ORIGIN)
+    ),
     DATABASE_URL: Config.Redacted("DATABASE_URL"),
     GOOGLE_CLIENT_ID: Config.String("GOOGLE_CLIENT_ID").pipe(
       Config.withDefault("")
@@ -78,8 +87,11 @@ export const server = Cloudflare.Worker("castlecare-server", {
     STRIPE_SECRET_KEY: Config.String("STRIPE_SECRET_KEY").pipe(
       Config.withDefault("")
     ),
+    STRIPE_WEBHOOK_BASE_URL: Config.String("STRIPE_WEBHOOK_BASE_URL").pipe(
+      Config.withDefault(API_ORIGIN)
+    ),
     STRIPE_WEBHOOK_PUBLIC_URL: Config.String("STRIPE_WEBHOOK_PUBLIC_URL").pipe(
-      Config.withDefault("")
+      Config.withDefault(API_ORIGIN)
     ),
     STRIPE_WEBHOOK_SECRET: Config.String("STRIPE_WEBHOOK_SECRET").pipe(
       Config.withDefault("")
@@ -105,6 +117,10 @@ export default Alchemy.Stack(
       },
       dev: {
         port: 3001,
+      },
+      domain: {
+        name: WEB_DOMAIN,
+        redirects: [WEB_WWW_DOMAIN],
       },
       env: {
         VITE_SERVER_URL: serverWorker.url.as<string>(),

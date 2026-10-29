@@ -62,8 +62,12 @@ This document summarizes the work done to migrate the CastleCare monorepo from V
 
 ## Current live deployment
 
-- Server: `https://castlecare-server.rocktown-labs.workers.dev`
-- Web: `https://castlecare-web.rocktown-labs.workers.dev`
+- Server: `https://api.callcastlecare.com`
+- Web: `https://callcastlecare.com`
+- `www.callcastlecare.com` permanently redirects to `https://callcastlecare.com`.
+- Workers.dev URLs remain available as fallbacks while the custom domains settle.
+
+The Alchemy stack declares both custom domains, so `alchemy deploy` provisions the DNS records and edge certificates automatically. The `callcastlecare.com` zone must already exist in the target Cloudflare account.
 
 Both respond successfully:
 
@@ -83,17 +87,14 @@ Both respond successfully:
    - Without it, transactional and auth emails will silently fail.
    - Add it to the Alchemy env map and to the deployment context.
 
-3. **Transfer `callcastlecare.com`**
-   - Add custom-domain records in `packages/infra/alchemy.run.ts` once DNS is ready.
-   - Update `CORS_ORIGIN` from the workers.dev placeholder to `https://callcastlecare.com`.
+3. **Verify the `callcastlecare.com` zone**
+   - The zone must be active in the Cloudflare account that Alchemy deploys to before `alchemy deploy` can attach the custom domains.
+   - `CORS_ORIGIN` defaults to `https://callcastlecare.com` and `STRIPE_WEBHOOK_BASE_URL` defaults to `https://api.callcastlecare.com`; override either only if the deployment hostnames change.
 
-4. **Update `STRIPE_WEBHOOK_PUBLIC_URL`**
-   - Point it to the final API URL after the domain transfer.
+4. **Update driver app config**
+   - Set `EXPO_PUBLIC_SERVER_URL=https://api.callcastlecare.com` in the driver app `.env` (`apps/driver/.env`).
 
-5. **Update driver app config**
-   - Set `EXPO_PUBLIC_SERVER_URL=https://castlecare-server.rocktown-labs.workers.dev` in the driver app `.env` (`apps/driver/.env`) until the custom domain is live.
-
-6. **Clean up stale Vercel references**
+5. **Clean up stale Vercel references**
    - `README.md` still documents `bun run dev:vercel`, `env:preview`, `deploy:prod`, and Vercel deployment steps.
    - `.vercelignore` and `bts.jsonc` still reference Vercel-only workflows.
    - These should be updated/removed in a small follow-up PR.
@@ -108,18 +109,25 @@ Both respond successfully:
 When redeploying, make sure these are exported or present in the environment:
 
 - `BETTER_AUTH_SECRET`
-- `BETTER_AUTH_URL`
-- `CORS_ORIGIN`
 - `DATABASE_URL`
-- `ADMIN_EMAIL` (has a default, but can be explicit)
 - `RESEND_API_KEY`
 - `RESEND_WEBHOOK_SECRET`
 - `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
-- `STRIPE_WEBHOOK_PUBLIC_URL`
+- `STRIPE_BILLING_WEBHOOK_SECRET`
+- `STRIPE_COMMERCE_WEBHOOK_SECRET`
+- `STRIPE_CONNECT_WEBHOOK_SECRET`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
-- `STRIPE_PLATFORM_ACCOUNT`
+- `ADMIN_EMAIL` (has a default, but can be explicit)
+
+These are derived or defaulted by `packages/infra/alchemy.run.ts` and only need overriding when the hostnames change:
+
+- `BETTER_AUTH_URL` — the API Worker URL (`https://api.callcastlecare.com`)
+- `CORS_ORIGIN` — the web origin (`https://callcastlecare.com`)
+- `STRIPE_WEBHOOK_BASE_URL` — the API origin (`https://api.callcastlecare.com`)
+- `STRIPE_WEBHOOK_PUBLIC_URL` — legacy alias, defaulted to the API origin
+
+External provider dashboards do not follow the Worker URLs. After a domain cutover, update the Google OAuth redirect URI, re-run Stripe catalog sync and install the new webhook secrets, and repoint the Resend webhook. See `docs/stripe-operations.md`.
 
 ## Verification commands
 
@@ -134,11 +142,11 @@ bun run test
 bun run dev
 
 # Deploy infrastructure
-bun run deploy
+bun run infra:deploy
 ```
 
 ## Notes
 
-- `localhost` and `*.workers.dev` origins are currently accepted for CORS until the custom domain is connected.
+- Production CORS accepts only `CORS_ORIGIN` (defaults to `https://callcastlecare.com`). Localhost origins are accepted only outside production; `*.workers.dev` origins are no longer reflected automatically, so preview hosts must be added to `CORS_ORIGIN` explicitly.
 - Currency continues to be stored and transmitted as integer cents across DB, API, Stripe, and UI calculations.
 - Local development now uses the same code paths as the deployed Worker; there are no Vercel-specific runtime branches left.
