@@ -93,7 +93,13 @@ const getErrorLogFields = (error: unknown) => {
 };
 
 app.use(requestLogger());
-app.use(secureHeaders());
+app.use(
+  secureHeaders({
+    // The web and API are separate origins; private media is loaded by <img>
+    // from the web origin and must remain readable there.
+    crossOriginResourcePolicy: "cross-origin",
+  })
+);
 app.use("/*", originGuard());
 
 // Bind the database and auth stack to the request lifecycle. On Cloudflare
