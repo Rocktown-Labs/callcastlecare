@@ -8,13 +8,13 @@ A source-and-local security pass reviewed the web app, API, auth, database acces
 |---|---|---|
 | High | Credentialed CORS reflected any `*.workers.dev` or substring-`localhost` origin | Exact allowlist in `apps/server/src/lib/origin.ts`; unsafe-method `originGuard` |
 | High | CSRF on cookie-authenticated JSON endpoints | Origin guard plus `SameSite=Lax` production cookies |
-| High | Provider checkout created accounts with `TempPassword123!` | Required applicant password; existing emails return 409; webhook no longer creates users |
+| High | Provider checkout created accounts with `TempPassword123!` | Required applicant password; existing emails resume only with the matching password; webhook no longer creates users |
 | Medium | `GET /api/v1/me` exposed the session token | `toPublicSession` / `toPublicUser` projections |
 | Medium | Unauthenticated media upload to R2 | Auth plus target/path authorization; `crypto.randomUUID` path segment |
 | Medium | Any user could attach media to any order/leg | Ownership/assignment checks on upload and attach |
 | Medium | Guest checkout could read a saved address by id | Guests must use address text, not `addressId` |
-| Medium | Client-supplied address coordinates were trusted | Server-side Radar geocoding |
-| Medium | Non-atomic payout/refund/tip transitions | Durable claims before Stripe calls; advisory-locked refunds |
+| Medium | Client-supplied address coordinates/state were trusted | Server-side Radar geocoding for coordinates and state/zip |
+| Medium | Non-atomic payout/refund/tip transitions | Durable claims before Stripe calls; transient failures retry; refunds use a claim row |
 
 ## Deployment leads
 
