@@ -1,130 +1,140 @@
-# callcastlecare
+# CallCastleCare
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Start, Hono, and more.
+<div align="center">
+  <h3>Everyday home services, scheduled around real life</h3>
+  <p>A customer booking and operations platform for lawn care, laundry, and window washing, with a dedicated mobile workspace for drivers.</p>
+</div>
 
-## Features
+---
 
-- **TypeScript** - For type safety and improved developer experience
-- **TanStack Start** - SSR framework with TanStack Router
-- **React Native** - Build mobile apps using React
-- **Expo** - Tools for React Native development
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **Hono** - Lightweight, performant server framework
-- **Node.js** - Runtime environment
-- **Drizzle** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
-- **Oxlint** - Oxlint + Oxfmt (linting & formatting)
-- **Turborepo** - Optimized monorepo build system
+## 1. Product Overview
 
-## Getting Started
+**CallCastleCare** is a home-services platform focused on three active services: lawn care, laundry, and window washing. Customers can explore services, request a booking, check out, and follow post-booking status. Admins coordinate orders, staff, routes, service offerings, notifications, and support from a web dashboard.
 
-First, install the dependencies:
+The current product keeps the customer experience on the web across desktop and mobile browsers. The separate Expo app in `apps/driver` is the dedicated native workspace for drivers and field staff.
+
+## 2. System Architecture & Technology
+
+| Layer | Technologies |
+| --- | --- |
+| Web | React 19, TanStack Start, TanStack Router, TanStack Query, TanStack Form |
+| API | Hono in `apps/server`, with route modules for orders, checkout, dispatch, locations, and notifications |
+| Database | Drizzle ORM and the repository's relational database package |
+| Authentication | Better Auth |
+| UI | Tailwind CSS v4 and shared shadcn-style UI primitives |
+| Driver app | Expo / React Native |
+| Workspace | Bun and Turborepo |
+
+The web application and server API are separate workspaces. Shared packages hold authentication, database, email, environment, and UI concerns so booking and operations use the same application contracts.
+
+## 3. Product Workflows
+
+### Customers
+
+- Discover current services and read service-area information.
+- Submit a service booking with customer and location details.
+- Complete checkout and receive a booking confirmation.
+- Return to a tracking page using the booking's tracking identifier.
+- Access account, help, FAQ, policies, and customer support pages.
+
+### Admin operations
+
+- Review incoming orders and inspect order details.
+- Maintain the service catalog and service areas.
+- Assign and manage staff and dispatch routes.
+- Configure notifications and operational settings.
+- Handle customer support and order follow-up.
+
+### Drivers and field staff
+
+`apps/driver` is a dedicated Expo application for staff workflows. The project keeps driver operations separate from customer booking so each app can use navigation and screens suited to its role.
+
+## 4. Workspace Structure
+
+```text
+callcastlecare/
+├── apps/
+│   ├── web/                 # Public site, booking, checkout, and admin dashboard
+│   ├── server/              # Hono API, webhooks, queue handlers, and workflows
+│   └── driver/              # Expo driver and field-staff app
+├── packages/
+│   ├── api/                 # Shared API contracts and utilities
+│   ├── auth/                # Authentication configuration
+│   ├── db/                  # Relational schema and migrations
+│   ├── email/               # Transactional email templates and delivery
+│   ├── env/                 # Environment validation
+│   ├── infra/               # Deployment infrastructure
+│   └── ui/                  # Shared UI primitives
+└── package.json
+```
+
+## 5. Local Development
+
+### Prerequisites
+
+- Bun 1.3.14
+- A local development environment for the configured database
+- Xcode or Android Studio for local driver-app builds
+
+Install dependencies and start the workspaces:
 
 ```bash
 bun install
-```
-
-## Database Setup
-
-This project uses PostgreSQL with Drizzle ORM.
-
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/server/.env` file with your PostgreSQL connection details.
-
-3. Apply the schema to your database:
-
-```bash
-bun run db:push
-```
-
-Then, run the development server:
-
-```bash
 bun run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application. Use the Expo Go app to run the mobile application. The API is running at [http://localhost:3000](http://localhost:3000).
-
-## UI Customization
-
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
-
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
-
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
+Run a specific app when needed:
 
 ```bash
-npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
+bun run dev:web
+bun run dev:server
+bun run dev:driver
 ```
 
-Import shared components like this:
+Use the repository's environment example files to configure local services. Keep local credentials and provider secrets out of commits.
 
-```tsx
-import { Button } from "@callcastlecare/ui/components/button";
+### Database
+
+The database workspace provides schema, migration, and studio commands. Choose the operation that matches your local database setup:
+
+```bash
+bun run db:generate
+bun run db:migrate
+bun run db:studio
 ```
 
-### Add app-specific blocks
+## 6. Useful Commands
 
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
+| Command | Purpose |
+| --- | --- |
+| `bun run dev` | Start configured development workspaces |
+| `bun run dev:web` | Start the customer/admin web app |
+| `bun run dev:server` | Start the API |
+| `bun run dev:driver` | Start the Expo driver app |
+| `bun run build` | Build configured workspaces |
+| `bun run check-types` | Check TypeScript types |
+| `bun run check` | Run Ultracite lint and format checks |
+| `bun run test` | Run configured tests |
+| `bun run db:generate` | Generate database artifacts |
+| `bun run db:migrate` | Apply database migrations |
+| `bun run infra:plan` | Preview infrastructure changes |
+| `bun run infra:deploy` | Deploy the configured infrastructure |
 
-## Deployment
+## 7. Deployment
 
-### Vercel Services
+The repository supports a web service and an API service. Use the linked project configuration and the deployment scripts in the repository for preview and production operations. Environment variables are managed by the deployment provider; local `.env` files are not uploaded automatically.
 
-- Target: web + server
-- Config: `vercel.json`
-- Link the project first: bun run deploy:setup
-- Local Vercel dev: bun run dev:vercel
-- Sync preview env: bun run env:preview
-- Sync production env: bun run env:production
-- Dry-run check (no upload): bun run deploy:check
-- Preview deploy: bun run deploy
-- Production deploy: bun run deploy:prod
-- Web requests under `/api/*` route to the server service and are rewritten before reaching the backend. Vercel Services share project environment variables, but deploys do not upload local `.env` files automatically. Link the project with `vercel link`, then run the env sync command before your first deploy (otherwise the deployment starts with no env vars), or pass one-off envs with `vercel deploy -e KEY=value`. Pass Vercel CLI flags to the env sync command directly, for example: `bun run env:production --scope your-team`.
+The active scope is the service catalog, booking and checkout, customer status, admin operations, and the driver app. The previous Homes configurator and broader home-services marketplace are outside the current product scope.
 
-For more details, see the guide on [Deploying to Vercel](https://www.better-t-stack.dev/docs/guides/vercel).
+## 8. Quality Checks
 
-## Git Hooks and Formatting
-
-- Run checks: `bun run check`
-
-## Project Structure
-
-```
-callcastlecare/
-├── apps/
-│   ├── web/         # Frontend application (React + TanStack Start)
-│   ├── driver/      # Driver mobile app (React Native, Expo)
-│   └── server/      # Backend API (Hono)
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
+```bash
+bun run check
+bun run check-types
+bun run test
+bun run build
 ```
 
-## Available Scripts
-
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run dev:server`: Start only the server
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run dev:driver`: Start the React Native/Expo driver app development server
-- `bun run db:push`: Push schema changes to database
-- `bun run db:generate`: Generate database client/types
-- `bun run db:migrate`: Run database migrations
-- `bun run db:studio`: Open database studio UI
-- `bun run check`: Run Oxlint and Oxfmt
-- `bun run deploy:setup`: Link this repo to a Vercel project (first-time setup)
-- `bun run dev:vercel`: Run the Vercel Services dev environment locally
-- `bun run env:preview`: Sync local env files to the Vercel preview environment
-- `bun run env:production`: Sync local env files to the Vercel production environment
-- `bun run deploy`: Create a Vercel preview deployment
-- `bun run deploy:prod`: Deploy to Vercel production
-- `bun run deploy:check`: Dry-run a deploy to preview framework detection and included files without uploading
+<div align="center">
+  <sub>Designed to make recurring home-service tasks easier to coordinate.</sub>
+</div>
